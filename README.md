@@ -1,9 +1,26 @@
 # HomeMCP
 
-Windows-first MCP runtime with browser, desktop, terminal, on-demand worker supervision and HITL.
+Windows-first MCP runtime providing a fixed Browser/Windows Desktop tool surface with on-demand worker supervision, dynamic loopback ports and local human approval.
 
-> **Repository import in progress (October 2026).** The MSI pipeline and Windows packaging scripts are staged, but this checkout does not yet contain the full v0.1.6 Host sources/tests. **Do not run or publish the MSI until the full source tree is committed and Windows CI passes.** No signed MSI or auto-updater has been released.
+**Status: pre-release source. Not an installable, tested MSI yet. Do not expose to public internet.**
 
-Target: one-click Windows MSI with isolated dependencies, dynamic localhost ports, worker ownership checks, safe lifecycle management and later WebAuthn-based approvals.
+## Repo contents
 
-Source snapshot currently held as `homemcp-v0.1.6-msi-build-source.zip` in the ChatGPT conversation; it has not yet been fully synchronized into this repository.
+- `src/`: Host, MCP client, owned-worker supervisor, remote egress adapter (disabled by default), SQLite HITL, WebAuthn Passkey integration.
+- `web/`: local-only approval UI.
+- `test/`: unit and local integration tests.
+- `scripts/`: development installation, local provisioning, smoke test and launcher.
+- `packaging/`: WiX 6 MSI payload construction, candidate build and manifest generation.
+- `.github/workflows/windows-msi.yml`: Windows candidate pipeline; **not yet verified end-to-end**.
+
+Development only (Node.js 22+ must be installed):
+```powershell
+npm.cmd install
+npm.cmd test
+powershell -ExecutionPolicy Bypass -File .\scripts\install-dev.ps1
+powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\HomeMCP-dev\scripts\start-dev.ps1"
+```
+
+The development installer uses the user's globally installed workers; the MSI *build* is designed to bundle private runtimes. Neither should replace existing Airlock or modify the user's active MCP services.
+
+The MSI candidate cannot be considered zero-dependency or auto-updating until its Windows build, clean install, stop/upgrade/uninstall and real Browser/Desktop E2E tests pass. See [design](docs/design.md), [MSI status](docs/msi-status.md) and [release gates](docs/release.md).
