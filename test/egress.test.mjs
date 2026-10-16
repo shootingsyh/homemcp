@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {EgressManager,renderCloudflareConfig} from '../src/egress.mjs';const log={write(){}};
+test('no public tunnel by default',async()=>{for(const mode of ['disabled','external']){const m=new EgressManager({mode,enabled:true},log,'.');await m.start(49123);assert.equal(m.state.running,false)}});
+test('Cloudflare requires access policy',async()=>{const m=new EgressManager({mode:'cloudflare',enabled:true,tunnel:'house',credentialsFile:'C:\\not-a-file.json',hostname:'mcp.example.com'},log,'.');await assert.rejects(()=>m.start(49123),/cloudflare_access_not_confirmed/)});
+test('dynamic origin and 404 catchall',()=>{const c=JSON.parse(renderCloudflareConfig({tunnel:'home',credentialsFile:'C:\\secrets\\credentials.json',hostname:'mcp.example.com',originPort:49555}));assert.equal(c.ingress[0].service,'http://127.0.0.1:49555');assert.equal(c.ingress[1].service,'http_status:404')});
+test('reject invalid tunnel',()=>{assert.throws(()=>renderCloudflareConfig({tunnel:'a; bad',credentialsFile:'C:\\a',hostname:'mcp.example.com',originPort:4890}))});
