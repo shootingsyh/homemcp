@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 export const EGRESS_MODES = ["disabled", "external", "cloudflare"];
 export function renderCloudflareConfig({tunnel,credentialsFile,hostname,originPort}) {
- if (!tunnel || !credentialsFile || !hostname || !Number.isInteger(originPort)) throw new Error("invalid_cloudflare_config");
+ if (!/^[a-zA-Z0-9_-]{1,128}$/.test(tunnel||"")) throw new Error("invalid_tunnel_name");
+ if (typeof credentialsFile!=="string" || !credentialsFile) throw new Error("invalid_credentials_path");
+ if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(hostname||"") || !hostname.includes(".")) throw new Error("invalid_hostname");
+ if (!Number.isInteger(originPort)||originPort<1||originPort>65535) throw new Error("invalid_origin_port");
  return JSON.stringify({tunnel,"credentials-file":credentialsFile,ingress:[{hostname,service:"http://127.0.0.1:"+originPort},{service:"http_status:404"}]},null,2)+"\n";
 }
 export class EgressManager {
