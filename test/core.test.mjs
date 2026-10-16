@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {Log,Worker,tokenEqual,rpcError} from '../src/core.mjs';import os from 'node:os';import fs from 'node:fs';import path from 'node:path';
+test('token comparison',()=>{assert.equal(tokenEqual('abc','abc'),true);assert.equal(tokenEqual('abc','abd'),false);assert.equal(tokenEqual(undefined,'abc'),false)});
+test('jsonrpc error schema',()=>{assert.equal(rpcError(2,-1,'x').error.code,-1)});
+test('log rotates and does not store arguments',()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'homemcp-test-'));const l=new Log(dir,'test',150,3);for(let i=0;i<25;i++)l.write('info','event',{index:i});assert.ok(fs.readdirSync(dir).length<=4);fs.rmSync(dir,{recursive:true,force:true})});
+test('worker has no background polling',()=>{const w=new Worker({name:'test',url:'http://127.0.0.1:8999/mcp'},{write(){}});assert.equal(w.status,'stopped');assert.equal(w.pending,null)});
