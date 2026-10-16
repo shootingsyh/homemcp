@@ -1,0 +1,6 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HomeMCP Approval</title>
+<style>body{font:16px system-ui,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem}button,input{padding:.65rem;margin:.35rem}article{border:1px solid #888;padding:1rem;margin:1rem 0;border-radius:.5rem}pre{white-space:pre-wrap;word-break:break-word}.note{color:#555}</style>
+<h1>HomeMCP Approvals</h1><p class="note">Local development only. Register a passkey using the local administrator token. Approval always requires passkey authentication.</p>
+<section id="enrollment"><input id="bootstrap" type="password" autocomplete="off" placeholder="Local admin token"><button id="register">Register passkey</button></section>
+<button id="login">Sign in with passkey</button><button id="refresh">Refresh approvals</button><button id="logout">Sign out</button>
+<p id="status" aria-live="polite"></p><main id="queue"></main><script src="/approval.js" defer></script></html>
