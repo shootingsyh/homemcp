@@ -33,8 +33,11 @@ async function isPortOpen(url,timeout=350){const u=new URL(url);return new Promi
 export async function ownsListener(port,rootPid){
  if(process.platform!=='win32')return true;
  if(!Number.isInteger(rootPid)||rootPid<=0)return false;
- const script=`$ErrorActionPreference='Stop';$p=${port};$root=${rootPid};$owner=(Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction Stop | Where-Object { $_.LocalAddress -eq '127.0.0.1' } | Select-Object -First 1 -ExpandProperty OwningProcess);if(-not $owner){exit 3};$seen=@{};for($i=0;$i -lt 24 -and $owner -gt 0;$i++){if($owner -eq $root){Write-Output OWNED;exit 0};if($seen.ContainsKey([string]$owner)){break};$seen[[string]$owner]=$true;$proc=Get-CimInstance Win32_Process -Filter "ProcessId=$owner" -ErrorAction Stop;if(-not $proc){break};$owner=[int]$proc.ParentProcessId};exit 4`;
- try{const {stdout}=await execFileAsync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:10000,maxBuffer:16384});return stdout.trim()==='OWNED'}catch{return false}
+ // Query the port owner once and walk its ancestors. Do not use names or command lines
+ // to adopt somebody else's process.
+ const ps=`$ErrorActionPreference='Stop';$portValue=${port};$rootValue=${rootPid};$listeners=@(Get-NetTCPConnection -State Listen -LocalPort $portValue -ErrorAction Stop);$listener=$listeners | Where-Object { $_.LocalAddress -eq '127.0.0.1' } | Select-Object -First 1;if($null -eq $listener){exit 3};$current=[int]$listener.OwningProcess;$seen=@{};for($n=0;$n -lt 32 -and $current -gt 0;$n++){if($current -eq $rootValue){Write-Output 'OWNED';exit 0};if($seen.ContainsKey([string]$current)){break};$seen[[string]$current]=$true;$proc=Get-CimInstance Win32_Process -Filter "ProcessId=$current" -ErrorAction Stop;if($null -eq $proc){break};$current=[int]$proc.ParentProcessId};exit 4`;
+ try {const {stdout}=await execFileAsync('powershell.exe',['-NoProfile','-NonInteractive','-Command',ps],{windowsHide:true,timeout:10000,maxBuffer:16384});return stdout.trim()==='OWNED';}
+ catch(e){return false;}
 }
 function setPort(spec,port){const url=new URL(spec.url);url.port=String(port);spec.url=url.toString();const i=(spec.args||[]).findIndex(v=>v==='--port');if(i<0||i===spec.args.length-1)throw new Error('worker_missing_port_argument');spec.args[i+1]=String(port)}
 export class Worker {
