@@ -20,6 +20,9 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npm test
+      - name: Compile Windows tray manager
+        shell: pwsh
+        run: dotnet build .\native\Manager\Manager.csproj -c Release
       - name: Build private runtime payload
         shell: pwsh
         run: .\packaging\build-payload.ps1
