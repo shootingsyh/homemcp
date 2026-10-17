@@ -16,6 +16,22 @@ export class PasskeyManager{
  registered(){return this.db.prepare('SELECT COUNT(*) AS n FROM passkeys').get().n>0}
  async registrationOptions(){const {generateRegistrationOptions}=await this.sdk();const options=await generateRegistrationOptions({rpName:'HomeMCP',rpID:this.rpID,userName:'HomeMCP owner',userID:crypto.randomBytes(32),attestationType:'none',authenticatorSelection:{userVerification:'required',residentKey:'preferred'},excludeCredentials:this.db.prepare('SELECT id FROM passkeys').all().map(x=>({id:x.id}))});return {challengeId:this.storeChallenge('register',options.challenge),options}}
  async verifyRegistration(challengeId,response){const expectedChallenge=this.consumeChallenge(challengeId,'register');if(!expectedChallenge)return false;const {verifyRegistrationResponse}=await this.sdk();const result=await verifyRegistrationResponse({response,expectedChallenge,expectedOrigin:this.origin,expectedRPID:this.rpID,requireUserVerification:true});if(!result.verified||!result.registrationInfo)return false;const {credential}=result.registrationInfo;this.db.prepare('INSERT INTO passkeys(id,public_key,counter,transports,created_at) VALUES(?,?,?,?,?)').run(credential.id,b64(credential.publicKey),credential.counter,JSON.stringify(credential.transports||[]),Date.now());return true}
+ async decisionOptions(approvalId,decision){
+  if(!['approve','reject'].includes(decision)||!this.registered())throw new Error('invalid_decision');
+  const {generateAuthenticationOptions}=await this.sdk();
+  const options=await generateAuthenticationOptions({rpID:this.rpID,userVerification:'required',allowCredentials:this.db.prepare('SELECT id,transports FROM passkeys').all().map(x=>({id:x.id,transports:JSON.parse(x.transports||'[]')}))});
+  return {challengeId:this.storeChallenge('decision:'+approvalId+':'+decision,options.challenge),options};
+ }
+ async verifyDecision(challengeId,response,approvalId,decision){
+  const kind='decision:'+approvalId+':'+decision;
+  const expectedChallenge=this.consumeChallenge(challengeId,kind);
+  if(!expectedChallenge||!response||typeof response.id!=='string')return false;
+  const row=this.db.prepare('SELECT * FROM passkeys WHERE id=?').get(response.id);if(!row)return false;
+  const {verifyAuthenticationResponse}=await this.sdk();
+  const result=await verifyAuthenticationResponse({response,expectedChallenge,expectedOrigin:this.origin,expectedRPID:this.rpID,requireUserVerification:true,credential:{id:row.id,publicKey:unb64(row.public_key),counter:row.counter,transports:JSON.parse(row.transports||'[]')}});
+  if(!result.verified)return false;
+  this.db.prepare('UPDATE passkeys SET counter=? WHERE id=?').run(result.authenticationInfo.newCounter,row.id);return true;
+ }
  async authenticationOptions(){if(!this.registered())throw new Error('no_passkey_registered');const {generateAuthenticationOptions}=await this.sdk();const options=await generateAuthenticationOptions({rpID:this.rpID,userVerification:'required',allowCredentials:this.db.prepare('SELECT id,transports FROM passkeys').all().map(x=>({id:x.id,transports:JSON.parse(x.transports||'[]')}))});return {challengeId:this.storeChallenge('authenticate',options.challenge),options}}
  async verifyAuthentication(challengeId,response){const expectedChallenge=this.consumeChallenge(challengeId,'authenticate');if(!expectedChallenge||!response||typeof response.id!=='string')return null;const row=this.db.prepare('SELECT * FROM passkeys WHERE id=?').get(response.id);if(!row)return null;const {verifyAuthenticationResponse}=await this.sdk();const verified=await verifyAuthenticationResponse({response,expectedChallenge,expectedOrigin:this.origin,expectedRPID:this.rpID,requireUserVerification:true,credential:{id:row.id,publicKey:unb64(row.public_key),counter:row.counter,transports:JSON.parse(row.transports||'[]')}});if(!verified.verified)return null;this.db.prepare('UPDATE passkeys SET counter=? WHERE id=?').run(verified.authenticationInfo.newCounter,row.id);const token=crypto.randomBytes(32).toString('base64url');this.db.prepare('INSERT INTO sessions VALUES(?,?)').run(this.digest(token),Date.now()+this.sessionTTL);return token}
  digest(token){return crypto.createHash('sha256').update(token).digest('hex')}

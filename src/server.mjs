@@ -17,13 +17,16 @@ const dataDir=config.dataDir||path.join(os.homedir(),'.homemcp');
 const log=new Log(path.join(dataDir,'logs'));
 if(config.egress?.enabled)throw new Error('Remote egress disabled while security/HITL remains development-only');
 const egress=new EgressManager(config.egress,log,dataDir);
-const security=new ApprovalStore(dataDir,{timeoutMs:config.security?.approvalTimeoutMs||120000});
+const security=new ApprovalStore(dataDir,{timeoutMs:config.security?.approvalTimeoutMs||600000});
 const passkeys=new PasskeyManager(dataDir,{rpID:config.security?.rpID||'localhost',origin:config.security?.rpOrigin||`http://localhost:${port}`});
 const policy=config.security?.policy||{};
 async function saveConfig(){const tmp=configPath+'.tmp-'+process.pid;fs.writeFileSync(tmp,JSON.stringify(config,null,2),{mode:0o600});fs.renameSync(tmp,configPath);}
 const workers=new Map((config.workers||[]).map(w=>[w.name,new Worker(w,log,saveConfig)]));
 for(const [name,worker] of workers)worker.spec.env={...(worker.spec.env||{}),HOMEMCP_INSTALLATION_ID:config.installationId||'legacy-dev',HOMEMCP_WORKER_ROLE:name};
-const tools=Object.entries(config.tools||{}).map(([name,v])=>({name,description:v.description||`HomeMCP ${name}`,inputSchema:v.inputSchema||{type:'object',properties:{}}}));
+const approvalTools=['approval_status','approval_resume','approval_result','approval_cancel'].map(name=>({name,description:'HomeMCP '+name,inputSchema:{type:'object',properties:{pending_id:{type:'string'},arguments_hash:{type:'string'}},required:['pending_id']}}));
+const tools=[...Object.entries(config.tools||{}).map(([name,v])=>({name,description:v.description||`HomeMCP ${name}`,inputSchema:v.inputSchema||{type:'object',properties:{}}})),...approvalTools];
+function safePreview(name,args){if(name==='browser_navigate'&&typeof args.url==='string'&&args.url.length<=2048&&/^https?:\/\//i.test(args.url))return 'Navigate browser to '+args.url;return null;}
+
 const maxBody=512*1024;let shutting=false;
 const cookies=req=>Object.fromEntries((req.headers.cookie||'').split(';').map(s=>s.trim().split('=').map(decodeURIComponent)).filter(x=>x.length===2));
 async function readJSON(req){let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>65536)throw new Error('payload_too_large');}return JSON.parse(body||'{}');}
@@ -49,8 +52,11 @@ const server=http.createServer(async(req,res)=>{
   if(req.method!=='GET'&&!originOK(req))return send(403,{error:'invalid_origin'});
   if(!passkeys.isSession(cookies(req).homemcp_session))return send(401,{error:'passkey_required'});
   if(req.url==='/approval-api/pending'&&req.method==='GET')return send(200,{pending:security.pending()});
-  const match=req.url.match(/^\/approval-api\/([a-f0-9-]{36})\/(approve|reject)$/);
-  if(match&&req.method==='POST'){const state=security.complete(match[1],match[2]==='approve'?'approved':'rejected');return state?send(200,{status:state}):send(409,{error:'not_pending_or_expired'});}
+  const opts=req.url.match(/^\/approval-api\/([a-f0-9-]{36})\/(approve|reject)\/options$/);
+  if(opts&&req.method==='POST'){if(security.get(opts[1])?.status!=='pending')return send(409,{error:'not_pending'});return send(200,await passkeys.decisionOptions(opts[1],opts[2]));}
+  const verify=req.url.match(/^\/approval-api\/([a-f0-9-]{36})\/(approve|reject)\/verify$/);
+  if(verify&&req.method==='POST'){const {challengeId,response}=await readJSON(req);if(!await passkeys.verifyDecision(challengeId,response,verify[1],verify[2]))return send(401,{error:'verification_failed'});const value=security.complete(verify[1],verify[2]==='approve'?'approved':'rejected');return value?send(200,{status:value}):send(409,{error:'not_pending'});}
+
   return send(404,{error:'not_found'});
  }
  if(req.url?.startsWith('/admin/')){
@@ -72,14 +78,31 @@ const server=http.createServer(async(req,res)=>{
  case 'ping':result={};break;
  case 'tools/list':result={tools};break;
  case 'tools/call':{
-  const {name,arguments:args={}}=msg.params||{};const map=config.tools?.[name];if(!map)return send(200,rpcError(msg.id,-32602,'Unknown tool'));
+  const {name,arguments:args={}}=msg.params||{};
+  if(['approval_status','approval_result','approval_cancel','approval_resume'].includes(name)){
+   const id=args.pending_id,known=security.get(id);
+   if(!known)return send(200,rpcError(msg.id,-32602,'Unknown approval ID'));
+   if(name==='approval_status'){result=known;break;}
+   if(name==='approval_result'){result=security.result(id);break;}
+   if(name==='approval_cancel'){result={status:security.cancel(id)||known.status};break;}
+   const claimed=security.claim(id,args.arguments_hash);
+   if(!claimed){result={...security.result(id),message:'Not approved or already claimed; query approval_result for outcome'};break;}
+   const original=config.tools?.[claimed.tool];const w=workers.get(original?.worker);
+   if(!w){security.finish(id,null,'worker_not_configured');result=security.result(id);break;}
+   try{const output=await w.call(original.upstream,claimed.args);security.finish(id,output,null);}
+   catch(e){security.finish(id,null,e.message);}
+   result=security.result(id);break;
+  }
+  const map=config.tools?.[name];if(!map)return send(200,rpcError(msg.id,-32602,'Unknown tool'));
   const worker=workers.get(map.worker);if(!worker)return send(200,rpcError(msg.id,-32603,'Worker not configured'));
   const decision=policyFor(name,policy);
   if(decision==='deny'){security.record('tool_denied',name,null,'deny');return send(200,rpcError(msg.id,-32003,'Tool not permitted'));}
   if(decision==='ask'){
-   if(name!=='browser_navigate'||typeof args.url!=='string'||args.url.length>2048||!/^https?:\/\//i.test(args.url))return send(200,rpcError(msg.id,-32003,'Approval preview unavailable'));
-   const approval=security.create(name,args,`Navigate browser to ${args.url}`);log.write('info','approval_pending',{tool:name,approvalId:approval.id});
-   const outcome=await approval.promise;if(outcome!=='approved')return send(200,rpcError(msg.id,-32004,`Approval ${outcome}; id=${approval.id}`));
+   const preview=safePreview(name,args);
+   if(!preview)return send(200,rpcError(msg.id,-32003,'Approval preview unavailable'));
+   const approval=security.create(name,args,preview,msg.params?.idempotency_key||null);
+   result={status:'approval_required',pending_id:approval.id,tool:name,summary:preview,arguments_hash:approval.arguments_hash,expires_at:approval.expires_at,approval_url:'/approval?pending_id='+approval.id};
+   break;
   }
   log.write('info','tool_call',{tool:name,worker:map.worker});
   const upstream=await worker.call(map.upstream,args);security.record('tool_executed',name,null,'ok');result=upstream;break;
