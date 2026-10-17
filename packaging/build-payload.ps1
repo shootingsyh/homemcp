@@ -41,5 +41,8 @@ if __name__ == "__main__":
 '@ | Set-Content "$root\build\windows_mcp_entry.py" -Encoding UTF8
 & $py -m PyInstaller --noconfirm --clean --onefile --name windows-mcp --collect-all windows_mcp --distpath "$payload\workers" --workpath "$root\build\pyinstaller-work" --specpath "$root\build" "$root\build\windows_mcp_entry.py"
 if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP PyInstaller failed' }
+dotnet publish "$root\native\JobRunner\JobRunner.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$root\build\jobrunner" 
+if ($LASTEXITCODE -ne 0) { throw 'JobRunner publish failed' }
+Copy-Item "$root\build\jobrunner\HomeMCP.JobRunner.exe" "$payload\runtime\HomeMCP.JobRunner.exe" -Force
 & "$root\packaging\generate-wix.ps1" -Payload $payload -Output "$root\build\HomeMCP.generated.wxs"
 if ($LASTEXITCODE -ne 0) { throw 'WiX manifest generation failed' }
