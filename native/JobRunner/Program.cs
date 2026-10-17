@@ -31,7 +31,7 @@ internal static class Native {
  [DllImport("kernel32.dll",SetLastError=true)] public static extern uint WaitForSingleObject(IntPtr handle,uint ms);
 }
 public static class Program {
- static string Quote(string s) => "\"" + s.Replace("\\","\\\\").Replace("\"","\\\"") + "\"";
+ static string Quote(string s) => "\"" + s.Replace("\"","\\\"") + "\"";
  public static int Main(string[] args) {
   if(args.Length < 4 || args[0]!="--parent" || !int.TryParse(args[1],out int parentPid) || args[2]!="--") {Console.Error.WriteLine("Usage: HomeMCP.JobRunner --parent PID -- executable [args...]");return 2;}
   try {
