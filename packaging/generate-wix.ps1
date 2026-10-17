@@ -44,10 +44,11 @@ $xml=@"
         <Directory Id="INSTALLFOLDER" Name="app">$(FolderXml '')</Directory>
       </Directory>
     </StandardDirectory>
-    <Feature Id="MainFeature" Title="HomeMCP" Level="1"><ComponentGroupRef Id="PayloadGroup"/><ComponentRef Id="AutoRun"/></Feature>
+    <Feature Id="MainFeature" Title="HomeMCP" Level="1"><ComponentGroupRef Id="PayloadGroup"/><ComponentRef Id="AutoRun"/><ComponentRef Id="FirstRunWizard"/></Feature>
   </Package>
   <Fragment><ComponentGroup Id="PayloadGroup">$parts</ComponentGroup></Fragment>
   <Fragment><Component Id="AutoRun" Directory="INSTALLFOLDER" Guid="*"><RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="HomeMCP" Value="&quot;[SystemFolder]wscript.exe&quot; &quot;[INSTALLFOLDER]scripts\launch-hidden.vbs&quot;" Type="string" KeyPath="yes" /></Component></Fragment>
+  <Fragment><Component Id="FirstRunWizard" Directory="INSTALLFOLDER" Guid="*"><RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\RunOnce" Name="HomeMCP-NetworkSetup" Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]scripts\network-setup.ps1&quot;" Type="string" KeyPath="yes" /></Component></Fragment>
 </Wix>
 "@
 [System.IO.File]::WriteAllText($Output,$xml,[System.Text.UTF8Encoding]::new($false))
