@@ -9,11 +9,11 @@ jobs:
   msi:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '22.16.0'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
       - name: Unit tests
@@ -41,7 +41,7 @@ jobs:
           & "$env:LOCALAPPDATA\HomeMCP\app\runtime\node.exe" --version
           & "$env:LOCALAPPDATA\HomeMCP\app\workers\windows-mcp.exe" --help
           & "$env:LOCALAPPDATA\HomeMCP\app\runtime\node.exe" "$env:LOCALAPPDATA\HomeMCP\app\workers\playwright\cli.mjs" --help
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: success()
         with:
           name: HomeMCP-msi-candidate
