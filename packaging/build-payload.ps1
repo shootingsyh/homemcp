@@ -44,5 +44,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP PyInstaller failed' }
 dotnet publish "$root\native\JobRunner\JobRunner.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$root\build\jobrunner" 
 if ($LASTEXITCODE -ne 0) { throw 'JobRunner publish failed' }
 Copy-Item "$root\build\jobrunner\HomeMCP.JobRunner.exe" "$payload\runtime\HomeMCP.JobRunner.exe" -Force
+dotnet publish "$root\native\Manager\Manager.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$root\build\manager"
+if ($LASTEXITCODE -ne 0) { throw 'Manager publish failed' }
+Copy-Item "$root\build\manager\HomeMCP.Manager.exe" "$payload\runtime\HomeMCP.Manager.exe" -Force
 & "$root\packaging\generate-wix.ps1" -Payload $payload -Output "$root\build\HomeMCP.generated.wxs"
 if ($LASTEXITCODE -ne 0) { throw 'WiX manifest generation failed' }
