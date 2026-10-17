@@ -1,9 +1,16 @@
 {
   "name": "homemcp",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "type": "module",
-  "engines": {"node": ">=22"},
-  "scripts": {"start": "node src/server.mjs", "test": "node --test test/*.test.mjs"},
-  "dependencies": {"@simplewebauthn/server": "13.2.2"}
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "13.2.2"
+  }
 }
