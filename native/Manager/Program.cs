@@ -59,7 +59,7 @@ sealed class TrayContext : ApplicationContext {
    });
    if(host==null)throw new InvalidOperationException("Failed to spawn HomeMCP host");
    host.EnableRaisingEvents=true;
-   host.Exited+=(_,_)=>{try{if(settings is {IsHandleCreated:true})settings.BeginInvoke(RefreshStatus);}catch{}};
+   host.Exited+=(_,_)=>{try{if(settings is {IsHandleCreated:true})settings.BeginInvoke((Action)RefreshStatus);}catch{}};
   } catch(Exception ex){MessageBox.Show(ex.Message,"HomeMCP start failed",MessageBoxButtons.OK,MessageBoxIcon.Error);}
   RefreshStatus();
  }
@@ -146,10 +146,10 @@ sealed class TrayContext : ApplicationContext {
       tcs.TrySetResult(result);
      }catch(Exception ex){tcs.TrySetResult("ERROR "+ex.Message);}
     }
-    if(settings is {IsHandleCreated:true})settings.BeginInvoke(Execute);
+    if(settings is {IsHandleCreated:true})settings.BeginInvoke((Action)Execute);
     else {
       // The WinForms synchronization context is backed by the tray message loop.
-      formDispatcher.BeginInvoke(Execute);
+      formDispatcher.BeginInvoke((Action)Execute);
     }
     await writer.WriteLineAsync(await tcs.Task);
    }catch(OperationCanceledException){break;}
