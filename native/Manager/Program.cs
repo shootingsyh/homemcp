@@ -32,6 +32,7 @@ sealed class TrayContext : ApplicationContext {
  string ConfigPath => Path.Combine(dir,"config.json");
  public TrayContext(){
   Directory.CreateDirectory(dir);
+  _=formDispatcher.Handle; // marshal pipe callbacks to the UI thread even with no window open
   tray=new NotifyIcon {Icon=SystemIcons.Application,Text="HomeMCP",Visible=true};
   var menu=new ContextMenuStrip();
   menu.Items.Add("Settings",null,(_,_)=>OpenSettings());
@@ -77,7 +78,7 @@ sealed class TrayContext : ApplicationContext {
  void SaveHostname(){
   if(hostnameBox is null)return;
   var input=hostnameBox.Text.Trim();
-  if(input.Length>0&&!Uri.TryCreate(input,UriKind.Absolute,out var uri)){
+  if(input.Length>0&&!Uri.TryCreate(input,UriKind.Absolute,out _)){
    MessageBox.Show("Use an HTTPS URL, e.g. https://mcp.example.com");return;
   }
   if(input.Length>0 && (!input.StartsWith("https://",StringComparison.OrdinalIgnoreCase)||new Uri(input).Host.Length==0)){
@@ -128,8 +129,8 @@ sealed class TrayContext : ApplicationContext {
    try{
     using var pipe=new NamedPipeServerStream("HomeMCP-Manager",PipeDirection.InOut,1,PipeTransmissionMode.Byte,PipeOptions.Asynchronous|PipeOptions.CurrentUserOnly);
     await pipe.WaitForConnectionAsync(cancellation);
-    using var reader=new StreamReader(pipe,leaveOpen:true);
-    using var writer=new StreamWriter(pipe,leaveOpen:true){AutoFlush=true};
+    using var reader=new StreamReader(pipe,System.Text.Encoding.UTF8,false,1024,true);
+    using var writer=new StreamWriter(pipe,System.Text.Encoding.UTF8,1024,true){AutoFlush=true};
     var cmd=(await reader.ReadLineAsync(cancellation))?.Trim().ToLowerInvariant();
     var tcs=new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
     void Execute(){
