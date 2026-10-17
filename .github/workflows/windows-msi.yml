@@ -54,6 +54,10 @@ jobs:
           $c=Get-Content $conf -Raw | ConvertFrom-Json
           if ($c.token.Length -ne 64 -or $c.security.adminToken.Length -ne 64) { throw 'Generated token invalid' }
           Remove-Item $conf -Force
+          $runner=Join-Path $app 'runtime\HomeMCP.JobRunner.exe'
+          $marker=Join-Path $scratch 'runner-started.txt'
+          & $runner --parent $PID -- "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "Set-Content -LiteralPath '$marker' -Value ok"
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path $marker)) { throw 'JobRunner could not launch Windows PowerShell with an absolute path' }
       - uses: actions/upload-artifact@v5
         if: success()
         with:
