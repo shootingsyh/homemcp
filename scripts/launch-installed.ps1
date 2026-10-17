@@ -12,8 +12,24 @@ try {
  $runner=Join-Path $app 'runtime\HomeMCP.JobRunner.exe'
  if (!(Test-Path $runner)) { throw 'HomeMCP JobRunner is missing; cannot ensure cleanup of child processes' }
  $env:HOMEMCP_JOB_RUNNER=$runner
- & $node (Join-Path $app 'src\server.mjs') --config $config
- if ($LASTEXITCODE -ne 0) { throw "HomeMCP Node host exited with code $LASTEXITCODE" }
+ $bridge=@()
+ try {
+  $bridgeConfig=Join-Path $data 'cloudflared\config.yml'
+  $proxyScript=Join-Path $data 'protected-proxy.mjs'
+  if ((Test-Path $bridgeConfig) -and (Test-Path $proxyScript)) {
+   $cloud=Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet') -Filter 'cloudflared.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+   if (!$cloud) {throw 'HomeMCP Cloudflare enabled but cloudflared.exe missing'}
+   $bridge+=Start-Process -FilePath $node -ArgumentList @($proxyScript) -PassThru -WindowStyle Hidden
+   $bridge+=Start-Process -FilePath $cloud -ArgumentList @('tunnel','--config',('"' + $bridgeConfig + '"'),'run') -PassThru -WindowStyle Hidden
+  }
+  & $node (Join-Path $app 'src\server.mjs') --config $config
+  if ($LASTEXITCODE -ne 0) { throw "HomeMCP Node host exited with code $LASTEXITCODE" }
+ } finally {
+  foreach($child in $bridge) {
+   try {if (!$child.HasExited) {Stop-Process -Id $child.Id -Force -ErrorAction SilentlyContinue}} catch {}
+   $child.Dispose()
+  }
+ }
 } catch {
  try {
   $logDir=Join-Path $env:LOCALAPPDATA 'HomeMCP\logs'
