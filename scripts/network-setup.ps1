@@ -33,7 +33,7 @@ if($wsl){
   foreach($entry in $distroLines){
    $distro=($entry -replace '\0','').Trim()
    if(!$distro -or $distro -notmatch '^[\w.-]+$'){continue}
-   $text=@(& wsl.exe -d $distro -- sh -lc 'for f in "$HOME"/.cloudflared/config.yml "$HOME"/.cloudflared/config.yaml; do if [ -r "$f" ]; then cat "$f"; fi; done' 2>$null) -join "\n"
+   $text=@(& wsl.exe -d $distro -- sh -lc 'for f in "$HOME"/.cloudflared/config.yml "$HOME"/.cloudflared/config.yaml; do if [ -r "$f" ]; then cat "$f"; fi; done' 2>$null) -join "`n"
    if($text){Add-FromConfig "wsl:$distro" $text}
   }
  }catch{Write-Warning "WSL detection skipped: $($_.Exception.Message)"}
