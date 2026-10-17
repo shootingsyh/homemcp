@@ -21,7 +21,7 @@ try {
  }
  $manifest=Invoke-RestMethod -Uri $FeedUrl -TimeoutSec 15
  if(!$manifest.version -or !$manifest.url -or !$manifest.sha256){throw 'Invalid release manifest'}
- if([string]$manifest.version -notmatch '^\\d+\\.\\d+\\.\\d+
+ if([string]$manifest.version -notmatch '^[0-9]+[.][0-9]+[.][0-9]+$'){throw 'Unsafe release version'}
  if(!$manifest.url.StartsWith('https://')){throw 'MSI URL must use HTTPS'}
  if($manifest.sha256 -notmatch '^[0-9a-fA-F]{64}$'){throw 'Invalid SHA-256'}
  $current=(Get-Content (Join-Path $PSScriptRoot '..\package.json') -Raw|ConvertFrom-Json).version
