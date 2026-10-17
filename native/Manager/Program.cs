@@ -44,6 +44,10 @@ sealed class TrayContext : ApplicationContext {
   tray.DoubleClick+=(_,_)=>OpenSettings();
   _=Task.Run(()=>PipeLoop(cancel.Token));
   Start();
+  if(!File.Exists(StatePath)){
+   OpenSettings();
+   LaunchNetworkWizard();
+  }
  }
  bool Running=>host is {HasExited:false};
  string Status=>Running?$"Running (PID {host!.Id})":"Stopped";
@@ -94,6 +98,13 @@ sealed class TrayContext : ApplicationContext {
   File.WriteAllText(StatePath,obj.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));
   MessageBox.Show("Saved locally. Remote access remains disabled until auth and tunnel validation.","HomeMCP");
  }
+ void LaunchNetworkWizard(){
+  try{
+   Process.Start(new ProcessStartInfo("powershell.exe"){
+    UseShellExecute=true,Arguments="-NoProfile -ExecutionPolicy Bypass -File \""+Path.Combine(app,"scripts","network-setup.ps1")+"\" -Force"
+   });
+  }catch(Exception ex){MessageBox.Show(ex.Message,"Network setup");}
+ }
  void OpenSettings(){
   if(settings is {IsDisposed:false}){settings.Activate();return;}
   var form=new Form{Text="HomeMCP Settings",Width=490,Height=360,StartPosition=FormStartPosition.CenterScreen,FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false};
@@ -117,10 +128,7 @@ sealed class TrayContext : ApplicationContext {
   hostnameBox=new TextBox{Width=420,Text=ReadState()["url"]?.GetValue<string>()??""};layout.Controls.Add(hostnameBox);
   var save=new Button{Text="Save address (does not expose service)",AutoSize=true};save.Click+=(_,_)=>SaveHostname();layout.Controls.Add(save);
   var net=new Button{Text="Configure Cloudflare / Other Tunnel",AutoSize=true};
-  net.Click+=(_,_)=>{
-   try{Process.Start(new ProcessStartInfo("powershell.exe"){UseShellExecute=true,Arguments="-NoProfile -ExecutionPolicy Bypass -File \""+Path.Combine(app,"scripts","network-setup.ps1")+"\" -Force"});}
-   catch(Exception ex){MessageBox.Show(ex.Message);}
-  };
+  net.Click+=(_,_)=>LaunchNetworkWizard();
   layout.Controls.Add(net);
   layout.Controls.Add(new Label{Text="Management is local-only. Updating an address never changes public DNS.",AutoSize=true});
   form.Controls.Add(layout);
