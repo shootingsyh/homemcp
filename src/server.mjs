@@ -38,8 +38,8 @@ const server=http.createServer(async(req,res)=>{
   if(req.method!=='POST'||!originOK(req))return send(403,{error:'invalid_origin'});
   const bootstrap=adminAuthorized(req.headers.authorization,config.security?.adminToken);const session=cookies(req).homemcp_session;
   try{
-   if(req.url==='/auth/register/options'){if(!bootstrap)return send(401,{error:'bootstrap_auth_required'});return send(200,await passkeys.registrationOptions());}
-   if(req.url==='/auth/register/verify'){if(!bootstrap)return send(401,{error:'bootstrap_auth_required'});const {challengeId,response}=await readJSON(req);return send(200,{verified:await passkeys.verifyRegistration(challengeId,response)});}
+   if(req.url==='/auth/register/options'){const {invite}=await readJSON(req);if(!bootstrap&&!passkeys.validInvite(invite))return send(401,{error:'enrollment_invite_required'});return send(200,await passkeys.registrationOptions(bootstrap?null:invite));}
+   if(req.url==='/auth/register/verify'){const {challengeId,response,invite}=await readJSON(req);if(!bootstrap&&!passkeys.validInvite(invite))return send(401,{error:'enrollment_invite_required'});return send(200,{verified:await passkeys.verifyRegistration(challengeId,response,bootstrap?null:invite)});}
    if(req.url==='/auth/login/options')return send(200,await passkeys.authenticationOptions());
    if(req.url==='/auth/login/verify'){const {challengeId,response}=await readJSON(req);const token=await passkeys.verifyAuthentication(challengeId,response);if(!token)return send(401,{error:'verification_failed'});res.setHeader('Set-Cookie',`homemcp_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=600`);return send(200,{authenticated:true});}
    if(req.url==='/auth/logout'){passkeys.logout(session);res.setHeader('Set-Cookie','homemcp_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return send(200,{authenticated:false});}
@@ -50,17 +50,36 @@ const server=http.createServer(async(req,res)=>{
  if(req.url==='/approval.js'&&req.method==='GET'){res.writeHead(200,{'Content-Type':'application/javascript; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});return res.end(fs.readFileSync(new URL('../web/approval.js',import.meta.url)));}
  if(req.url?.startsWith('/approval-api/')){
   if(req.method!=='GET'&&!originOK(req))return send(403,{error:'invalid_origin'});
+  const one=req.url.match(/^\/approval-api\/([a-f0-9-]{36})$/);
+  if(one&&req.method==='GET'){
+   const item=security.get(one[1]);return item?send(200,{request:item}):send(404,{error:'not_found'});
+  }
+  const opts=req.url.match(/^\/approval-api\/([a-f0-9-]{36})\/(approve|reject)\/options$/);
+  if(opts&&req.method==='POST'){
+   if(security.get(opts[1])?.status!=='pending')return send(409,{error:'not_pending'});
+   try{return send(200,await passkeys.decisionOptions(opts[1],opts[2]));}
+   catch(e){log.write('warn','approval_options_error',{message:e.message});return send(400,{error:'passkey_unavailable'});}
+  }
+  const verify=req.url.match(/^\/approval-api\/([a-f0-9-]{36})\/(approve|reject)\/verify$/);
+  if(verify&&req.method==='POST'){
+   try{
+    const {challengeId,response}=await readJSON(req);
+    if(!await passkeys.verifyDecision(challengeId,response,verify[1],verify[2]))return send(401,{error:'verification_failed'});
+    const value=security.complete(verify[1],verify[2]==='approve'?'approved':'rejected');
+    return value?send(200,{status:value}):send(409,{error:'not_pending'});
+   }catch(e){log.write('warn','approval_verify_error',{message:e.message});return send(400,{error:'webauthn_failed'});}
+  }
   if(!passkeys.isSession(cookies(req).homemcp_session))return send(401,{error:'passkey_required'});
   if(req.url==='/approval-api/pending'&&req.method==='GET')return send(200,{pending:security.pending()});
-  const opts=req.url.match(/^\/approval-api\/([a-f0-9-]{36})\/(approve|reject)\/options$/);
-  if(opts&&req.method==='POST'){if(security.get(opts[1])?.status!=='pending')return send(409,{error:'not_pending'});return send(200,await passkeys.decisionOptions(opts[1],opts[2]));}
-  const verify=req.url.match(/^\/approval-api\/([a-f0-9-]{36})\/(approve|reject)\/verify$/);
-  if(verify&&req.method==='POST'){const {challengeId,response}=await readJSON(req);if(!await passkeys.verifyDecision(challengeId,response,verify[1],verify[2]))return send(401,{error:'verification_failed'});const value=security.complete(verify[1],verify[2]==='approve'?'approved':'rejected');return value?send(200,{status:value}):send(409,{error:'not_pending'});}
-
   return send(404,{error:'not_found'});
  }
  if(req.url?.startsWith('/admin/')){
   if(!adminAuthorized(req.headers.authorization,config.security?.adminToken))return send(401,{error:'unauthorized'});
+  if(req.url==='/admin/enrollment'&&req.method==='POST'){
+   const invitation=passkeys.issueEnrollmentInvite();
+   const base=config.security?.rpOrigin||`http://localhost:${port}`;
+   return send(200,{url:base+'/approval?enroll='+encodeURIComponent(invitation.token),expires_at:invitation.expires_at});
+  }
   if(req.method==='POST')return send(403,{error:'passkey_required_use_approval_api'});
   if(req.url==='/admin/approvals'&&req.method==='GET')return send(200,{pending:security.pending()});
   return send(404,{error:'not_found'});

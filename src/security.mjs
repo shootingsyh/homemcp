@@ -25,6 +25,7 @@ export class ApprovalStore{
   if(idempotencyKey!==null&&(typeof idempotencyKey!=='string'||idempotencyKey.length>128||idempotencyKey.length<12))throw new Error('invalid_idempotency_key');
   const digest=hash({tool,args});
   if(idempotencyKey){const existing=this.db.prepare('SELECT * FROM approvals WHERE idempotency_key=?').get(idempotencyKey);if(existing){if(existing.tool!==tool||existing.args_sha!==digest)throw new Error('idempotency_key_conflict');return this.public(existing)}}
+  this.db.prepare("UPDATE approvals SET status='expired',decision_at=? WHERE status='pending' AND expires_at<=?").run(Date.now(),Date.now());
   const count=this.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE status IN ('pending','approved','executing')").get().n;
   if(count>=this.limit)throw new Error('approval_queue_full');
   const id=crypto.randomUUID(),now=Date.now(),expires=now+this.timeoutMs;

@@ -7,7 +7,7 @@ function regOptions(o){return {...o,challenge:decode(o.challenge),user:{...o.use
 function loginOptions(o){return {...o,challenge:decode(o.challenge),allowCredentials:(o.allowCredentials||[]).map(c=>({...c,id:decode(c.id)}))};}
 function regJSON(c){return {id:c.id,rawId:encode(c.rawId),type:c.type,response:{clientDataJSON:encode(c.response.clientDataJSON),attestationObject:encode(c.response.attestationObject),transports:c.response.getTransports?.()||[]},clientExtensionResults:c.getClientExtensionResults()};}
 function authJSON(c){return {id:c.id,rawId:encode(c.rawId),type:c.type,response:{clientDataJSON:encode(c.response.clientDataJSON),authenticatorData:encode(c.response.authenticatorData),signature:encode(c.response.signature),userHandle:c.response.userHandle?encode(c.response.userHandle):undefined},clientExtensionResults:c.getClientExtensionResults()};}
-byId('register').onclick=async()=>{try{const token=byId('bootstrap').value;const {challengeId,options}=await request('/auth/register/options',{},token);const c=await navigator.credentials.create({publicKey:regOptions(options)});const r=await request('/auth/register/verify',{challengeId,response:regJSON(c)},token);byId('bootstrap').value='';status(r.verified?'Passkey registered. Sign in now.':'Registration failed');}catch(e){status('Registration failed: '+e.message)}};
+byId('register').onclick=async()=>{try{const token=byId('bootstrap').value;const invite=new URLSearchParams(location.search).get('enroll');const {challengeId,options}=await request('/auth/register/options',{invite},token);const c=await navigator.credentials.create({publicKey:regOptions(options)});const r=await request('/auth/register/verify',{challengeId,response:regJSON(c),invite},token);byId('bootstrap').value='';status(r.verified?'Passkey registered. Sign in now.':'Registration failed');}catch(e){status('Registration failed: '+e.message)}};
 byId('login').onclick=async()=>{try{const {challengeId,options}=await request('/auth/login/options');const c=await navigator.credentials.get({publicKey:loginOptions(options)});await request('/auth/login/verify',{challengeId,response:authJSON(c)});status('Authenticated');await refresh()}catch(e){status('Sign-in failed: '+e.message)}};
 byId('refresh').onclick=()=>refresh().catch(e=>status('Cannot load: '+e.message));
 byId('logout').onclick=async()=>{await request('/auth/logout');byId('queue').replaceChildren();status('Signed out')};
@@ -22,9 +22,11 @@ async function decide(item,decision,button){
  }catch(e){status('Decision not recorded: '+e.message);button.disabled=false}
 }
 async function refresh(){
- const r=await fetch('/approval-api/pending',{credentials:'same-origin'});if(!r.ok)throw Error('Sign in first');
- const {pending}=await r.json(),box=byId('queue');box.replaceChildren();
  const preferred=new URLSearchParams(location.search).get('pending_id');
+ const route=preferred?'/approval-api/'+encodeURIComponent(preferred):'/approval-api/pending';
+ const r=await fetch(route,{credentials:'same-origin'});
+ if(!r.ok)throw Error(preferred?'Request unavailable':'Sign in first to list approvals');
+ const body=await r.json(),pending=preferred?[body.request]:body.pending,box=byId('queue');box.replaceChildren();
  for(const item of pending){
   if(preferred&&item.id!==preferred)continue;
   const art=document.createElement('article'),title=document.createElement('h2');title.textContent=item.tool;
@@ -36,4 +38,10 @@ async function refresh(){
   box.append(art);
  }
  if(!box.children.length)status('No pending approvals (or request expired)');
+}
+
+if(new URLSearchParams(location.search).has('enroll')){
+ byId('enrollment').querySelector('input').hidden=true;
+ byId('register').textContent='Register this device Passkey';
+ status('One-time enrollment invitation. Create a passkey to bind this phone.');
 }
