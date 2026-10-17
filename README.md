@@ -24,3 +24,7 @@ powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\HomeMCP-dev\scripts\
 The development installer uses the user's globally installed workers; the MSI *build* is designed to bundle private runtimes. Neither should replace existing Airlock or modify the user's active MCP services.
 
 The MSI candidate cannot be considered zero-dependency or auto-updating until its Windows build, clean install, stop/upgrade/uninstall and real Browser/Desktop E2E tests pass. See [design](docs/design.md), [MSI status](docs/msi-status.md) and [release gates](docs/release.md).
+
+## Windows tray and local settings
+
+The Windows MSI includes a lightweight tray manager with Start/Stop/Restart and native Settings. See [manager usage](docs/manager.md). CLI uses a current-user-only named pipe. External URL configuration does not automatically expose your computer; Cloudflare setup remains opt-in.
