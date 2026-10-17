@@ -33,6 +33,17 @@ async function isPortOpen(url,timeout=350){const u=new URL(url);return new Promi
 export async function ownsListener(port,rootPid){
  if(process.platform!=='win32')return true;
  if(!Number.isInteger(rootPid)||rootPid<=0)return false;
+ // Fast path for a directly spawned server, avoiding PowerShell cold-start latency.
+ // Still require a real LISTEN socket whose PID exactly matches our child.
+ try {
+  const {stdout}=await execFileAsync('netstat.exe',['-ano','-p','TCP'],{windowsHide:true,timeout:3000,maxBuffer:4*1024*1024});
+  for(const line of stdout.split(/\\r?\\n/)){
+   const parts=line.trim().split(/\\s+/);
+   if(parts.length<5||parts[0]!=='TCP'||parts[3]!=='LISTENING')continue;
+   const addr=parts[1],pid=Number(parts[4]);
+   if(pid===rootPid&&addr.endsWith(':'+port)&&addr.startsWith('127.0.0.1:'))return true;
+  }
+ }catch{}
  // Query the port owner once and walk its ancestors. Do not use names or command lines
  // to adopt somebody else's process.
  const ps=`$ErrorActionPreference='Stop';$portValue=${port};$rootValue=${rootPid};$listeners=@(Get-NetTCPConnection -State Listen -LocalPort $portValue -ErrorAction Stop);$listener=$listeners | Where-Object { $_.LocalAddress -eq '127.0.0.1' } | Select-Object -First 1;if($null -eq $listener){exit 3};$current=[int]$listener.OwningProcess;$seen=@{};for($n=0;$n -lt 32 -and $current -gt 0;$n++){if($current -eq $rootValue){Write-Output 'OWNED';exit 0};if($seen.ContainsKey([string]$current)){break};$seen[[string]$current]=$true;$proc=Get-CimInstance Win32_Process -Filter "ProcessId=$current" -ErrorAction Stop;if($null -eq $proc){break};$current=[int]$proc.ParentProcessId};exit 4`;
