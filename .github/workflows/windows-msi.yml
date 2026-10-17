@@ -30,12 +30,12 @@ jobs:
         shell: pwsh
         run: |
           dotnet tool install --tool-path .\build\tools wix --version 6.0.2
-          & .\build\tools\wix.exe build .\build\HomeMCP.generated.wxs -arch x64 -o .\dist\HomeMCP-0.1.7-x64.msi
+          & .\build\tools\wix.exe build .\build\HomeMCP.generated.wxs -arch x64 -o .\dist\HomeMCP-0.1.8-x64.msi
           if ($LASTEXITCODE -ne 0) { throw 'wix build failed' }
       - name: Test silent MSI installation
         shell: pwsh
         run: |
-          $msi=(Resolve-Path .\dist\HomeMCP-0.1.7-x64.msi).Path
+          $msi=(Resolve-Path .\dist\HomeMCP-0.1.8-x64.msi).Path
           $p=Start-Process msiexec.exe -ArgumentList @('/i', ('"'+$msi+'"'), '/qn','/norestart','/l*v',"$env:TEMP\homemcp-msi.log") -Wait -PassThru
           if ($p.ExitCode -ne 0) { Get-Content "$env:TEMP\homemcp-msi.log" -Tail 80; throw "MSI install failed $($p.ExitCode)" }
           & "$env:LOCALAPPDATA\HomeMCP\app\runtime\node.exe" --version
