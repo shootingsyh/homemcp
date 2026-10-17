@@ -46,7 +46,10 @@ export class Worker {
  for(let i=0;i<8&&await isPortOpen(this.spec.url);i++){const previous=this.spec.url,replacement=await freeLocalPort();setPort(this.spec,replacement);await this.onPortChange(this.spec);this.log.write('warn','worker_port_rebound',{worker:this.spec.name,previousPort:new URL(previous).port,newPort:replacement})}
  if(await isPortOpen(this.spec.url))throw new Error('no_free_worker_port');
  const opts={cwd:this.spec.cwd||process.cwd(),env:{...process.env,...(this.spec.env||{})},windowsHide:true,stdio:['ignore','pipe','pipe'],shell:false};
- const child=spawn(this.spec.command,this.spec.args||[],opts);this.child=child;this.owned=false;
+ const useJobRunner=process.platform==='win32'&&!!process.env.HOMEMCP_JOB_RUNNER;
+ const command=useJobRunner?process.env.HOMEMCP_JOB_RUNNER:this.spec.command;
+ const args=useJobRunner?['--parent',String(process.pid),'--',this.spec.command,...(this.spec.args||[])]:this.spec.args||[];
+ const child=spawn(command,args,opts);this.child=child;this.owned=false;
  child.stdout.on('data',d=>this.log.write('debug','worker_stdout',{worker:this.spec.name,bytes:d.length}));
  child.stderr.on('data',d=>this.log.write('warn','worker_stderr',{worker:this.spec.name,bytes:d.length}));
  child.on('error',e=>{this.log.write('error','worker_spawn_error',{worker:this.spec.name,message:e.message});this.status='stopped';this.client=null;this.owned=false});
