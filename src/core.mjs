@@ -37,8 +37,8 @@ export async function ownsListener(port,rootPid){
  // Still require a real LISTEN socket whose PID exactly matches our child.
  try {
   const {stdout}=await execFileAsync('netstat.exe',['-ano','-p','TCP'],{windowsHide:true,timeout:3000,maxBuffer:4*1024*1024});
-  for(const line of stdout.split(/\\r?\\n/)){
-   const parts=line.trim().split(/\\s+/);
+  for(const line of stdout.split(/\r?\n/)){
+   const parts=line.trim().split(/\s+/);
    if(parts.length<5||parts[0]!=='TCP'||parts[3]!=='LISTENING')continue;
    const addr=parts[1],pid=Number(parts[4]);
    if(pid===rootPid&&addr.endsWith(':'+port)&&addr.startsWith('127.0.0.1:'))return true;
