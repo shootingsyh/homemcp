@@ -59,9 +59,11 @@ sealed class TrayContext : ApplicationContext {
    if(!File.Exists(script))throw new FileNotFoundException("HomeMCP start script missing",script);
    var runner=Path.Combine(app,"runtime","HomeMCP.JobRunner.exe");
    if(!File.Exists(runner))throw new FileNotFoundException("HomeMCP JobRunner missing",runner);
+   var powershell=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe");
+   if(!File.Exists(powershell))throw new FileNotFoundException("Windows PowerShell missing",powershell);
    host=Process.Start(new ProcessStartInfo(runner){
     UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=app,
-    Arguments="--parent "+Environment.ProcessId+" -- powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+script+"\"",
+    Arguments="--parent "+Environment.ProcessId+" -- \""+powershell+"\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+script+"\"",
    });
    if(host==null)throw new InvalidOperationException("Failed to spawn HomeMCP host");
    host.EnableRaisingEvents=true;
