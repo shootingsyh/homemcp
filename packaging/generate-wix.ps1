@@ -28,17 +28,21 @@ function FolderXml([string]$parent){
  }}
  return $buffer
 }
-$parts='';$i=0
+$parts='';$i=0;$managerFileId=''
 foreach($f in $files){
  $i++;$rel=$f.FullName.Substring($Payload.Length).TrimStart('\','/');$dir=Split-Path $rel -Parent; if(!$dir){$dir=''}
  $source=X $f.FullName
+ if($rel -ieq "runtime\HomeMCP.Manager.exe"){$managerFileId="PayloadFile$i"}
  $parts+="<Component Id=`"Payload$i`" Directory=`"$($ids[$dir])`" Guid=`"*`"><File Id=`"PayloadFile$i`" Source=`"$source`" KeyPath=`"yes`" /></Component>"
 }
+if(!$managerFileId){throw "Manager exe missing from MSI payload"}
 $xml=@"
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="HomeMCP" Manufacturer="HomeMCP" Version="0.1.6" UpgradeCode="E9437E1E-90A8-4D3D-9870-6A591E159CE4" Scope="perUser">
+  <Package Name="HomeMCP" Manufacturer="HomeMCP" Version="0.1.7" UpgradeCode="E9437E1E-90A8-4D3D-9870-6A591E159CE4" Scope="perUser">
     <MajorUpgrade DowngradeErrorMessage="A newer HomeMCP is already installed." />
     <MediaTemplate EmbedCab="yes" />
+    <CustomAction Id="LaunchHomeMCP" FileRef="$managerFileId" ExeCommand="" Execute="immediate" Impersonate="yes" Return="asyncNoWait" />
+    <InstallExecuteSequence><Custom Action="LaunchHomeMCP" After="InstallFinalize" Condition="NOT REMOVE AND UILevel &gt;= 3" /></InstallExecuteSequence>
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="HOMEFOLDER" Name="HomeMCP">
         <Directory Id="INSTALLFOLDER" Name="app">$(FolderXml '')</Directory>
