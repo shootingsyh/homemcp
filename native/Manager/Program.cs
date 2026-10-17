@@ -35,6 +35,7 @@ sealed class TrayContext : ApplicationContext {
  string LastHealth="Not checked";
  bool SetupDone=>File.Exists(Path.Combine(dir,"setup-complete.marker"));
  TextBox? hostnameBox;
+ Label? cloudflareStatus;
  string StatePath => Path.Combine(dir,"network-setup.json");
  string ConfigPath => Path.Combine(dir,"config.json");
  public TrayContext(){
@@ -183,11 +184,43 @@ sealed class TrayContext : ApplicationContext {
    });
   }catch(Exception ex){MessageBox.Show(ex.Message,"Network setup");}
  }
+
+ async Task DiscoverCloudflare(){
+  var result="Cloudflare tunnel: not detected. Local-only remains active.";
+  try{
+   var file=@"\\wsl.localhost\Ubuntu-22.04\home\shootingsyh\.cloudflared\config.yml";
+   if(File.Exists(file)){
+    var content=await File.ReadAllTextAsync(file);
+    var tunnel=System.Text.RegularExpressions.Regex.Match(content,@"(?m)^tunnel:\s*(\S+)").Groups[1].Value;
+    var hosts=System.Text.RegularExpressions.Regex.Matches(content,@"(?m)^\s*- hostname:\s*([^\s]+)");
+    if(tunnel.Length>0)result="Existing WSL tunnel: "+tunnel+" (in use by "+hosts.Count+" hostnames).\nNo route changes. Cloudflare Access: not verified.";
+   }
+  }catch(Exception ex){result="Cloudflare discovery unavailable: "+ex.GetType().Name+". No changes made.";}
+  if(cloudflareStatus is {IsDisposed:false})cloudflareStatus.Text=result;
+ }
+ void SaveCloudflarePlan(){
+  if(hostnameBox is null)return;
+  var name=hostnameBox.Text.Trim();
+  if(!Uri.TryCreate(name,UriKind.Absolute,out var uri)||uri.Scheme!="https"||uri.UserInfo!=""||uri.Port!=443||uri.AbsolutePath!="/"||uri.Query!=""||uri.Fragment!=""){
+   MessageBox.Show("Enter an HTTPS host URL without path or credentials, e.g. https://homemcp.example.com");return;
+  }
+  var state=ReadState();
+  state["mode"]="cloudflare-planned";
+  state["hostname"]=uri.Host;
+  state["url"]=uri.GetLeftPart(UriPartial.Authority);
+  state["tunnel"]="opencode";
+  state["source"]="wsl:Ubuntu-22.04";
+  state["remoteEnabled"]=false;
+  state["accessVerified"]=false;
+  File.WriteAllText(StatePath,state.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));
+  if(cloudflareStatus is {IsDisposed:false})cloudflareStatus.Text="Cloudflare plan saved: "+uri.Host+"\nNot connected: Cloudflare Access policy and remote authentication have not been verified.";
+  _=ProbeHealth();
+ }
  void OpenSettings(){
   if(settings is {IsDisposed:false}){settings.Activate();return;}
-  var form=new Form{Text=SetupDone?"HomeMCP Settings and Health":"HomeMCP First-run Setup",Width=630,Height=640,StartPosition=FormStartPosition.CenterScreen,MinimumSize=new Size(600,600)};
+  var form=new Form{Text=SetupDone?"HomeMCP Settings and Health":"HomeMCP First-run Setup",Width=690,Height=760,StartPosition=FormStartPosition.CenterScreen,MinimumSize=new Size(660,700)};
   settings=form;
-  var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=9,Padding=new Padding(18),AutoScroll=true};
+  var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=12,Padding=new Padding(18),AutoScroll=true};
   layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
   layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));
   layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));
@@ -198,6 +231,9 @@ sealed class TrayContext : ApplicationContext {
   layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));
   layout.RowStyles.Add(new RowStyle(SizeType.Absolute,65));
   layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));
+  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,26));
+  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,75));
+  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,45));
   statusLabel=new Label{Text=Status,AutoSize=true,Font=new Font("Segoe UI",11,FontStyle.Bold)};layout.Controls.Add(statusLabel);
   var actions=new FlowLayoutPanel{Dock=DockStyle.Fill};
   var start=new Button{Text="Start",Width=100};start.Click+=(_,_)=>{Start();_=ProbeHealth();};
@@ -215,13 +251,21 @@ sealed class TrayContext : ApplicationContext {
   var save=new Button{Text="Save URL",AutoSize=true};save.Click+=(_,_)=>SaveHostname();
   var cloud=new Button{Text="Advanced tunnel setup",AutoSize=true};cloud.Click+=(_,_)=>LaunchNetworkWizard();
   network.Controls.AddRange([save,cloud]);layout.Controls.Add(network);
+  layout.Controls.Add(new Label{Text="Cloudflare Tunnel (optional; requires Access protection before publishing)",AutoSize=true});
+  cloudflareStatus=new Label{Text="Checking existing Cloudflare configuration...",Dock=DockStyle.Fill,AutoSize=false};
+  layout.Controls.Add(cloudflareStatus);
+  var cfActions=new FlowLayoutPanel{Dock=DockStyle.Fill};
+  var cfCheck=new Button{Text="Detect tunnel",AutoSize=true};cfCheck.Click+=async (_,_)=>await DiscoverCloudflare();
+  var cfPlan=new Button{Text="Save Cloudflare plan",AutoSize=true};cfPlan.Click+=(_,_)=>SaveCloudflarePlan();
+  cfActions.Controls.AddRange([cfCheck,cfPlan]);layout.Controls.Add(cfActions);
+  _=DiscoverCloudflare();
   var foot=new FlowLayoutPanel{Dock=DockStyle.Fill};
   var finish=new Button{Text=SetupDone?"Recheck and start":"Finish setup and start",Width=210,Height=34};
   finish.Click+=(_,_)=>FinishSetup();foot.Controls.Add(finish);
   foot.Controls.Add(new Label{Text="Remote access remains OFF until secure setup is implemented.",AutoSize=true});
   layout.Controls.Add(foot);
   form.Controls.Add(layout);
-  form.FormClosed+=(_,_)=>{statusLabel=null;componentsLabel=null;hostnameBox=null;settings=null;};
+  form.FormClosed+=(_,_)=>{statusLabel=null;componentsLabel=null;hostnameBox=null;cloudflareStatus=null;settings=null;};
   form.Show();
  }
  async Task PipeLoop(CancellationToken cancellation){
