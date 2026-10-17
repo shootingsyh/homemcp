@@ -41,6 +41,19 @@ jobs:
           & "$env:LOCALAPPDATA\HomeMCP\app\runtime\node.exe" --version
           & "$env:LOCALAPPDATA\HomeMCP\app\workers\windows-mcp.exe" --help
           & "$env:LOCALAPPDATA\HomeMCP\app\runtime\node.exe" "$env:LOCALAPPDATA\HomeMCP\app\workers\playwright\cli.mjs" --help
+      - name: Test installed provisioning on Windows PowerShell 5.1
+        shell: pwsh
+        run: |
+          $app=Join-Path $env:LOCALAPPDATA 'HomeMCP\app'
+          $scratch=Join-Path $env:RUNNER_TEMP 'homemcp-native-ps-test'
+          New-Item -ItemType Directory -Force $scratch | Out-Null
+          $conf=Join-Path $scratch 'config.json'
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $app 'scripts\provision-installed.ps1') -AppDir $app -ConfigPath $conf
+          if ($LASTEXITCODE -ne 0) { throw "Provision failed on Windows PowerShell 5.1: $LASTEXITCODE" }
+          if (!(Test-Path $conf)) { throw 'Installed provision script did not create config.json' }
+          $c=Get-Content $conf -Raw | ConvertFrom-Json
+          if ($c.token.Length -ne 64 -or $c.security.adminToken.Length -ne 64) { throw 'Generated token invalid' }
+          Remove-Item $conf -Force
       - uses: actions/upload-artifact@v5
         if: success()
         with:
