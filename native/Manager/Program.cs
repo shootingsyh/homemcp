@@ -20,7 +20,7 @@ static class Program {
  }
 }
 sealed class TrayContext : ApplicationContext {
- readonly string app=AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+ readonly string app=Directory.GetParent(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar))!.FullName;
  readonly string dir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"HomeMCP");
  readonly NotifyIcon tray;
  Process? host;
