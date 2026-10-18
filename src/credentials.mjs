@@ -69,7 +69,8 @@ export function buildFillCode(origin,username,password,usernameSelector,password
  if(!validName(username)||!validSelector(usernameSelector)||!validSelector(passwordSelector)||usernameSelector===passwordSelector)throw new Error('invalid_fill_target');
  // One in-page execution: origin validation and both writes cannot be separated by a navigation.
  const values={site,username,password,usernameSelector,passwordSelector};
- return `return await page.evaluate((v) => {
+ return `() => {
+ const v=${JSON.stringify(values)};
   if(location.protocol!=='https:'||(location.hostname!==v.site&&!location.hostname.endsWith('.'+v.site)))throw new Error('origin_mismatch');
   const pick=(css,type) => {
    const matches=document.querySelectorAll(css);
@@ -88,5 +89,35 @@ export function buildFillCode(origin,username,password,usernameSelector,password
    field.dispatchEvent(new Event('change',{bubbles:true}));
   }
   return 'HOMEMCP_CREDENTIAL_FILLED';
- },${JSON.stringify(values)});`;
+ }`;
+}
+
+export function buildDiagnoseCode(origin,usernameSelector,passwordSelector){
+ const site=credentialDomain(origin);
+ if(!validSelector(usernameSelector)||!validSelector(passwordSelector))throw new Error('invalid_fill_target');
+ const v={site,usernameSelector,passwordSelector};
+ return `() => {
+ const v=${JSON.stringify(v)};
+ const safe=(selector)=>{
+  try{
+   const matches=[...document.querySelectorAll(selector)];
+   return {count:matches.length,types:matches.slice(0,4).map(x=>x instanceof HTMLInputElement?x.type:'non_input')};
+  }catch{return {error:'invalid_selector'}}
+ };
+ return {frames:[{origin:location.origin,hostname:location.hostname,
+   matches_site:location.protocol==='https:'&&(location.hostname===v.site||location.hostname.endsWith('.'+v.site)),
+   username:safe(v.usernameSelector),password:safe(v.passwordSelector),
+   iframe_count:document.querySelectorAll('iframe').length}]};
+ }`;
+}
+export function classifyBrowserFillError(output){
+ if(!output||typeof output!=='object')return 'browser_worker_unavailable';
+ const body=Array.isArray(output.content)?output.content.filter(x=>x?.type==='text').map(x=>x.text||'').join('\n'):'';
+ const result=body.includes('### Result')?body.split('### Result')[1].split('###')[0].trim():'';
+ if(!output.isError&&result==='"HOMEMCP_CREDENTIAL_FILLED"')return null;
+ for(const reason of ['origin_mismatch','selector_not_unique','invalid_input','not_password_field','not_username_field','invalid_selector']){
+  if(body.includes(reason))return reason;
+ }
+ if(/about:blank|No open pages|Target page/.test(body))return 'browser_page_unavailable';
+ return 'browser_execution_unconfirmed';
 }
