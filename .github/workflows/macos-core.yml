@@ -19,6 +19,12 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Build native Keychain helper
         run: swiftc native/macos/keychain-helper.swift -framework Security -o native/macos/home-mcp-keychain
+      - name: Prepare Playwright MCP worker
+        run: |
+          mkdir -p build/macos-worker
+          npm install --prefix build/macos-worker --no-audit --no-fund --ignore-scripts --save=false @playwright/mcp@0.0.48
+      - name: Host integration smoke
+        run: sh scripts/macos/smoke-host.sh
       - name: Portable core tests
         run: node --test test/*.test.mjs
       - name: Syntax check
@@ -27,3 +33,5 @@ jobs:
           node --check src/credentials.mjs
           node --check src/platform/file-security.mjs
           node --check src/platform/credential-protector.mjs
+          node --check scripts/macos/provision.mjs
+          node --check scripts/macos/write-launch-agent.mjs
