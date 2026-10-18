@@ -78,7 +78,19 @@ export class Worker {
  }catch(e){lastError=e;await sleep(500)}}
  throw new Error(`mcp_not_ready: ${lastError?.message||'timeout'}`);
  }catch(e){this.status='failed';this.client=null;this.owned=false;this.failures++;this.retryAfter=Date.now()+Math.min(60000,1000*2**Math.min(this.failures,6));this.log.write('error','worker_start_failed',{worker:this.spec.name,message:e.message,backoffMs:this.retryAfter-Date.now()});await this.stop();throw e}}
- async call(name,args){const c=await this.ensure();try{return await c.request('tools/call',{name,arguments:args||{}})}catch(e){if(e.message.includes('upstream_session_lost')){this.client=null;this.owned=false;this.status='stopped';this.log.write('warn','session_lost',{worker:this.spec.name})}throw e}}
+ async call(name,args){
+  let c=await this.ensure();
+  // Validate the upstream session before sending a potentially non-idempotent tool call.
+  if(c.session){
+   try{await c.request('ping',{});}
+   catch(e){
+    if(!e.message.includes('upstream_session_lost'))throw e;
+    this.client=null;this.owned=false;this.status='stopped';
+    this.log.write('warn','session_reconnect_before_call',{worker:this.spec.name});
+    c=await this.ensure();
+   }
+  }
+  try{return await c.request('tools/call',{name,arguments:args||{}})}catch(e){if(e.message.includes('upstream_session_lost')){this.client=null;this.owned=false;this.status='stopped';this.log.write('warn','session_lost',{worker:this.spec.name})}throw e}}
  async list(){const c=await this.ensure();const result=await c.request('tools/list',{});this.tools=result.tools||[];return this.tools}
  async stop(){this.client=null;this.owned=false;const child=this.child;if(!child){this.status='stopped';return}this.stopping=true;this.status='stopping';
  if(process.platform==='win32'){await new Promise(resolve=>{const killer=spawn('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});killer.once('error',resolve);killer.once('exit',resolve)})}else{try{child.kill('SIGTERM')}catch{}}

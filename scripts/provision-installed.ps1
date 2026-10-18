@@ -21,7 +21,7 @@ $desktopPort=Free-Port @($hostPort,$browserPort)
 $dataDir=Split-Path $ConfigPath -Parent
 $config=@{
  installationId=([Guid]::NewGuid().ToString('N'));host='127.0.0.1';port=$hostPort;dataDir=(Join-Path $dataDir 'data');token=(New-Token)
- security=@{adminToken=(New-Token);approvalTimeoutMs=600000;policy=@{browser_navigate='ask';browser_snapshot='allow';desktop_Snapshot='allow';desktop_Screenshot='allow'}}
+ security=@{adminToken=(New-Token);approvalTimeoutMs=600000;policy=@{browser_navigate='allow';browser_snapshot='allow';desktop_Snapshot='allow';desktop_Screenshot='allow'}}
  egress=@{enabled=$false;mode='disabled'}
  workers=@(
   @{name='browser';command=(Join-Path $AppDir 'runtime\node.exe');args=@((Join-Path $AppDir 'workers\playwright\cli.mjs'),'--browser','msedge','--user-data-dir',(Join-Path $dataDir 'EdgeProfile'),'--shared-browser-context','--host','127.0.0.1','--port',([string]$browserPort));url="http://127.0.0.1:$browserPort/mcp";startupMs=35000},
