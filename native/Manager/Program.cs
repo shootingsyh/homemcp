@@ -1,3 +1,4 @@
+using HomeMCP.Processes;
 using System;
 using System.IO;
 using System.IO.Pipes;
@@ -26,6 +27,7 @@ sealed class TrayContext : ApplicationContext {
  readonly string dir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"HomeMCP");
  readonly NotifyIcon tray;
  Process? host;
+ readonly IProcessSupervisor supervisor=new WindowsJobProcessSupervisor();
  CancellationTokenSource cancel=new();
  Form? settings;
  Label? statusLabel;
@@ -50,7 +52,7 @@ sealed class TrayContext : ApplicationContext {
   menu.Items.Add("Start",null,(_,_)=>Start());
   menu.Items.Add("Stop",null,(_,_)=>Stop());
   menu.Items.Add("Restart",null,(_,_)=>{Stop();Start();});
-  menu.Items.Add("Exit manager",null,(_,_)=>{Stop();cancel.Cancel();tray.Visible=false;ExitThread();});
+  menu.Items.Add("Exit manager",null,(_,_)=>{Stop();cancel.Cancel();supervisor.Dispose();tray.Visible=false;ExitThread();});
   tray.ContextMenuStrip=menu;
   tray.DoubleClick+=(_,_)=>OpenSettings();
   _=Task.Run(()=>PipeLoop(cancel.Token));
@@ -65,7 +67,7 @@ sealed class TrayContext : ApplicationContext {
  string ComponentReport(){
   var lines=new System.Collections.Generic.List<string>();
   lines.Add("Node runtime: "+(File.Exists(Path.Combine(app,"runtime","node.exe"))?"Installed":"MISSING"));
-  lines.Add("JobRunner: "+(File.Exists(Path.Combine(app,"runtime","HomeMCP.JobRunner.exe"))?"Installed":"MISSING"));
+  lines.Add("Process supervision: Windows Job Object");
   lines.Add("PowerShell: "+(File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe"))?"Available":"MISSING"));
   lines.Add("Playwright worker: "+(File.Exists(Path.Combine(app,"workers","playwright","cli.mjs"))?"Installed":"MISSING"));
   lines.Add("Desktop worker: "+(File.Exists(Path.Combine(app,"workers","windows-mcp.exe"))?"Installed":"MISSING"));
@@ -75,7 +77,6 @@ sealed class TrayContext : ApplicationContext {
   return string.Join(Environment.NewLine,lines);
  }
  bool RequirementsOK()=>File.Exists(Path.Combine(app,"runtime","node.exe"))
-  &&File.Exists(Path.Combine(app,"runtime","HomeMCP.JobRunner.exe"))
   &&File.Exists(Path.Combine(app,"workers","playwright","cli.mjs"))
   &&File.Exists(Path.Combine(app,"workers","windows-mcp.exe"))
   &&File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe"));
@@ -184,25 +185,37 @@ sealed class TrayContext : ApplicationContext {
  void Start(){
   if(Running)return;
   try{
-   var script=Path.Combine(app,"scripts","launch-installed.ps1");
-   if(!File.Exists(script))throw new FileNotFoundException("HomeMCP start script missing",script);
-   var runner=Path.Combine(app,"runtime","HomeMCP.JobRunner.exe");
-   if(!File.Exists(runner))throw new FileNotFoundException("HomeMCP JobRunner missing",runner);
-   var powershell=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe");
-   if(!File.Exists(powershell))throw new FileNotFoundException("Windows PowerShell missing",powershell);
-   host=Process.Start(new ProcessStartInfo(runner){
+   var node=Path.Combine(app,"runtime","node.exe");
+   var server=Path.Combine(app,"src","server.mjs");
+   if(!File.Exists(node)||!File.Exists(server))throw new FileNotFoundException("Installed Host missing");
+   if(!File.Exists(ConfigPath)){
+     var provision=Path.Combine(app,"scripts","provision-installed.ps1");
+     var powershell=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe");
+     var setup=new ProcessStartInfo(powershell){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=app};
+     foreach(var arg in new[]{"-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",provision,"-AppDir",app,"-ConfigPath",ConfigPath})setup.ArgumentList.Add(arg);
+     using var process=Process.Start(setup)??throw new InvalidOperationException("Provisioning failed to start");
+     if(!process.WaitForExit(30000)||process.ExitCode!=0||!File.Exists(ConfigPath))
+       throw new InvalidOperationException("Initial configuration provisioning failed");
+   }
+   var startInfo=new ProcessStartInfo(node){
     UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=app,
-    Arguments="--parent "+Environment.ProcessId+" -- \""+powershell+"\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+script+"\"",
-   });
+   };
+   startInfo.ArgumentList.Add(server);
+   startInfo.ArgumentList.Add("--config");
+   startInfo.ArgumentList.Add(ConfigPath);
+   host=supervisor.Start(startInfo);
    if(host==null)throw new InvalidOperationException("Failed to spawn HomeMCP host");
    host.EnableRaisingEvents=true;
    host.Exited+=(_,_)=>{try{if(settings is {IsHandleCreated:true})settings.BeginInvoke((Action)RefreshStatus);}catch{}};
-  } catch(Exception ex){MessageBox.Show(ex.Message,"HomeMCP start failed",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+  } catch(Exception ex){
+    try{File.AppendAllText(Path.Combine(dir,"manager-startup-errors.log"),DateTimeOffset.UtcNow.ToString("O")+" "+ex.GetType().Name+": "+ex.Message+Environment.NewLine);}catch{}
+    MessageBox.Show(ex.Message,"HomeMCP start failed",MessageBoxButtons.OK,MessageBoxIcon.Error);
+   }
   RefreshStatus();
  }
  void Stop(){
   try{
-   if(Running){host!.Kill(entireProcessTree:true);host.WaitForExit(5000);}
+   if(host!=null){supervisor.Stop(host);if(!host.HasExited)host.WaitForExit(5000);}
   }catch(Exception ex){MessageBox.Show(ex.Message,"HomeMCP stop failed");}
   finally{host?.Dispose();host=null;LastHealth="Stopped";}
   RefreshStatus();
