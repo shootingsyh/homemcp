@@ -1,0 +1,9 @@
+# Public AWS server. TLS on port 443 is NOT terminated here.
+bindAddr = "0.0.0.0"
+bindPort = 7000
+vhostHTTPSPort = 443
+
+auth.method = "token"
+auth.token = "{{ .Envs.FRP_TOKEN }}"
+transport.tls.force = true
+# No HTTP virtual host, dashboard, or admin interface exposed.
