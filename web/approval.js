@@ -18,7 +18,15 @@ async function decide(item,decision,button){
   const {challengeId,options}=await request(base+'/options');
   const credential=await navigator.credentials.get({publicKey:loginOptions(options)});
   const result=await request(base+'/verify',{challengeId,response:authJSON(credential)});
-  status('Decision saved: '+result.status);await refresh();
+  if(result.status==='approved'||result.status==='rejected'){
+   byId('queue').replaceChildren();
+   document.title=result.status==='approved'?'Approved - HomeMCP':'Rejected - HomeMCP';
+   status(result.status==='approved'?'✓ Approved. Return to Muse; the operation can now continue.':'Request rejected. You can return to Muse.');
+   const done=document.createElement('p');done.textContent='You can close this tab. If your browser allows it, this page will close automatically.';
+   byId('queue').append(done);
+   history.replaceState(null,'','/approval');
+   window.close();
+  }else{status('Decision saved: '+result.status);await refresh();}
  }catch(e){status('Decision not recorded: '+e.message);button.disabled=false}
 }
 async function refresh(){
@@ -44,4 +52,17 @@ if(new URLSearchParams(location.search).has('enroll')){
  byId('enrollment').querySelector('input').hidden=true;
  byId('register').textContent='Register this device Passkey';
  status('One-time enrollment invitation. Create a passkey to bind this phone.');
+}
+
+const params=new URLSearchParams(location.search);
+if(params.has('pending_id')){
+ byId('enrollment').hidden=true;
+ byId('login').hidden=true;byId('refresh').hidden=true;byId('logout').hidden=true;
+ document.querySelector('.note').textContent='Review this specific operation. One Passkey confirmation is needed to approve.';
+ refresh().catch(e=>status('Cannot load request: '+e.message));
+}else if(params.has('enroll')){
+ byId('login').hidden=true;byId('refresh').hidden=true;byId('logout').hidden=true;
+}else{
+ byId('enrollment').hidden=true;
+ document.querySelector('.note').textContent='Open an approval link from Muse to approve in one step.';
 }
