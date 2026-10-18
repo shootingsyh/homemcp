@@ -49,6 +49,13 @@ export class McpClient {
 export async function freeLocalPort(){return new Promise((resolve,reject)=>{const s=net.createServer();s.once('error',reject);s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(e=>e?reject(e):resolve(p))})});}
 async function isPortOpen(url,timeout=350){const u=new URL(url);return new Promise(resolve=>{const s=net.createConnection({host:u.hostname,port:Number(u.port)});let doneFlag=false;const done=x=>{if(doneFlag)return;doneFlag=true;s.destroy();resolve(x)};s.setTimeout(timeout);s.once('connect',()=>done(true));s.once('error',()=>done(false));s.once('timeout',()=>done(false))})}
 export async function ownsListener(port,rootPid){
+ if(process.platform==='darwin'){
+  if(!Number.isInteger(rootPid)||rootPid<=0)return false;
+  try {
+   const {stdout}=await execFileAsync('/usr/sbin/lsof',['-nP','-a','-p',String(rootPid),'-iTCP:'+port,'-sTCP:LISTEN','-t'],{timeout:3000,maxBuffer:8192});
+   return stdout.trim().split(/\s+/).includes(String(rootPid));
+  }catch{return false}
+ }
  if(process.platform!=='win32')return true;
  if(!Number.isInteger(rootPid)||rootPid<=0)return false;
  // Fast path for a directly spawned server, avoiding PowerShell cold-start latency.
