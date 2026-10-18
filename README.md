@@ -28,3 +28,19 @@ The MSI candidate cannot be considered zero-dependency or auto-updating until it
 ## Windows tray and local settings
 
 The Windows MSI includes a lightweight tray manager with Start/Stop/Restart and native Settings. See [manager usage](docs/manager.md). CLI uses a current-user-only named pipe. External URL configuration does not automatically expose your computer; Cloudflare setup remains opt-in.
+
+### Agent-controlled credentials (Windows)
+HomeMCP optionally exposes `credential_save` and `credential_fill` when
+`security.credentialVaultEnabled` is explicitly set to `true` in the installed
+configuration. An authenticated Muse client calls `credential_save` with the
+*exact HTTPS origin*, username and password. Passwords are encrypted using
+Windows DPAPI CurrentUser before being stored in a separate SQLite database;
+existing credentials require `replace: true` to overwrite.
+
+`credential_fill` takes `origin`, `username`, `username_selector`, and
+`password_selector` (CSS selectors). The browser worker checks the *actual
+current page origin* and both unique, visible input types in the same browser
+execution before filling. Only a nonsecret fill status is returned. The site
+itself can read submitted credentials; use only trusted login origins. Password
+contents are never put into the standard Passkey approval queue. Normal
+browser tools cannot retrieve the vault; no plaintext export tool is provided.

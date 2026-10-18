@@ -7,6 +7,7 @@ import {Worker,Log,rpcError,rpcResult,tokenEqual,freeLocalPort} from './core.mjs
 import {EgressManager} from './egress.mjs';
 import {ApprovalStore,adminAuthorized,policyFor} from './security.mjs';
 import {PasskeyManager} from './passkeys.mjs';
+import {CredentialVault,normalizeOrigin,buildFillCode} from './credentials.mjs';
 const idx=process.argv.indexOf('--config');
 const configPath=idx>=0?process.argv[idx+1]:process.env.HOMEMCP_CONFIG;
 if(!configPath)throw new Error('Use --config <path>');
@@ -21,6 +22,11 @@ const egress=new EgressManager(config.egress,log,dataDir);
 const security=new ApprovalStore(dataDir,{timeoutMs:config.security?.approvalTimeoutMs||600000});
 const passkeys=new PasskeyManager(dataDir,{rpID:config.security?.rpID||'localhost',origin:config.security?.rpOrigin||`http://localhost:${port}`});
 const policy=config.security?.policy||{};
+const credentialVault=config.security?.credentialVaultEnabled===true?new CredentialVault(dataDir,path.join(path.dirname(fileURLToPath(import.meta.url)),'../scripts/credential-dpapi.ps1')):null;
+const credentialTools=[
+ {name:'credential_save',description:'Encrypt and save a website credential for this Windows user. Explicitly binds HTTPS origin and username. Does not log or return password; overwrite requires replace=true.',inputSchema:{type:'object',properties:{origin:{type:'string'},username:{type:'string'},password:{type:'string'},replace:{type:'boolean'}},required:['origin','username','password'],additionalProperties:false}},
+ {name:'credential_fill',description:'Fill saved username/password into explicitly specified CSS input selectors only when the current browser page has the exact saved HTTPS origin. Never returns a password.',inputSchema:{type:'object',properties:{origin:{type:'string'},username:{type:'string'},username_selector:{type:'string'},password_selector:{type:'string'}},required:['origin','username','username_selector','password_selector'],additionalProperties:false}}
+];
 async function saveConfig(){const tmp=configPath+'.tmp-'+process.pid;fs.writeFileSync(tmp,JSON.stringify(config,null,2),{mode:0o600});fs.renameSync(tmp,configPath);}
 const workers=new Map((config.workers||[]).map(w=>[w.name,new Worker(w,log,saveConfig)]));
 for(const [name,worker] of workers)worker.spec.env={...(worker.spec.env||{}),HOMEMCP_INSTALLATION_ID:config.installationId||'legacy-dev',HOMEMCP_WORKER_ROLE:name};
@@ -44,7 +50,7 @@ function validateDeletion(args){
 }
 function deleteApprovedFile(args){const full=validateDeletion(args);fs.unlinkSync(full);return {content:[{type:'text',text:'Deleted exactly one file: '+full}],deleted:true,path:full};}
 const approvalTools=['approval_status','approval_resume','approval_result','approval_cancel'].map(name=>({name,description:'HomeMCP '+name,inputSchema:{type:'object',properties:{pending_id:{type:'string'},arguments_hash:{type:'string'}},required:['pending_id']}}));
-const tools=[...Object.entries(config.tools||{}).map(([name,v])=>({name,description:v.description||`HomeMCP ${name}`,inputSchema:v.inputSchema||{type:'object',properties:{}}})),fileDeleteTool,...approvalTools];
+const tools=[...Object.entries(config.tools||{}).map(([name,v])=>({name,description:v.description||`HomeMCP ${name}`,inputSchema:v.inputSchema||{type:'object',properties:{}}})),fileDeleteTool,...(credentialVault?credentialTools:[]),...approvalTools];
 function safePreview(name,args){if(name==='file_delete'){try{return 'Delete exactly one regular file: '+validateDeletion(args)}catch{return null}}if(name==='browser_navigate'&&typeof args.url==='string'&&args.url.length<=2048&&/^https?:\/\//i.test(args.url))return 'Navigate browser to '+args.url;return null;}
 
 const maxBody=512*1024;let shutting=false;
@@ -137,6 +143,36 @@ const server=http.createServer(async(req,res)=>{
    catch(e){security.finish(id,null,e.message);}
    result=security.result(id);break;
   }
+  if(name==='credential_save'||name==='credential_fill'){
+   if(!credentialVault)return send(200,rpcError(msg.id,-32003,'Credential vault not enabled'));
+   try{
+    if(!args||typeof args!=='object'||Array.isArray(args))throw new Error('invalid_arguments');
+    const expected=name==='credential_save'?['origin','username','password','replace']:['origin','username','username_selector','password_selector'];
+    if(Object.keys(args).some(k=>!expected.includes(k)))throw new Error('invalid_arguments');
+    if(name==='credential_save'){
+     result=await credentialVault.save(args);
+    }else{
+     const secret=await credentialVault.secret(args.origin,args.username);
+     let code;
+     try{code=buildFillCode(args.origin,args.username,secret.toString('utf8'),args.username_selector,args.password_selector)}
+     finally{secret.fill(0)}
+     const browser=workers.get('browser');
+     if(!browser)throw new Error('browser_not_configured');
+     try{
+      const output=await browser.call('browser_run_code',{code});
+      const messages=Array.isArray(output?.content)?output.content.filter(item=>item?.type==='text').map(item=>item.text||'').join('\n'):'';
+      if(output?.isError||!/(?:^|\n)\s*["']?HOMEMCP_CREDENTIAL_FILLED["']?\s*(?:\n|$)/.test(messages))throw new Error('browser_fill_unconfirmed');
+      result={filled:true,origin:normalizeOrigin(args.origin),username:args.username};
+     }catch{throw new Error('browser_fill_failed_or_unconfirmed')}
+    }
+    security.record('credential_tool_executed',name,null,'ok');
+   }catch(e){
+    // Never serialize upstream tool errors or original arguments; they may contain credentials.
+    security.record('credential_tool_executed',name,null,'failed');
+    result={ok:false,error:['credential_already_exists_explicit_replace_required','credential_not_found','invalid_credentials','invalid_arguments','invalid_origin','https_origin_required','public_https_origin_required','invalid_username','invalid_fill_target'].includes(e.message)?e.message:'credential_operation_failed'};
+   }
+   break;
+  }
   if(name==='file_delete'){
    const preview=safePreview(name,args);
    if(!preview)return send(200,rpcError(msg.id,-32602,'File must be an existing regular file inside the Windows user home directory'));
@@ -169,5 +205,5 @@ server.on('error',async e=>{
 });
 server.on('listening',()=>{log.write('info','host_listening',{host,port});console.log(`HomeMCP ready at http://${host}:${port}/mcp`);egress.start(port).catch(e=>log.write('error','egress_start_failed',{message:e.message}));});
 server.listen(port,host);
-async function shutdown(){if(shutting)return;shutting=true;server.close();security.shutdown();passkeys.close();await Promise.allSettled([egress.stop(),...[...workers.values()].map(w=>w.stop())]);log.write('info','host_stopped');process.exit(0);}
+async function shutdown(){if(shutting)return;shutting=true;server.close();security.shutdown();passkeys.close();credentialVault?.close();await Promise.allSettled([egress.stop(),...[...workers.values()].map(w=>w.stop())]);log.write('info','host_stopped');process.exit(0);}
 process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);
