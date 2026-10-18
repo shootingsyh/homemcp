@@ -8,6 +8,7 @@ import {Worker,Log,rpcError,rpcResult,tokenEqual,freeLocalPort} from './core.mjs
 import {EgressManager} from './egress.mjs';
 import {ApprovalStore,adminAuthorized,policyFor} from './security.mjs';
 import {PasskeyManager} from './passkeys.mjs';
+import {HomeOAuth} from './oauth.mjs';
 import {CredentialVault,credentialDomain,buildFillCode,buildDiagnoseCode,classifyBrowserFillError} from './credentials.mjs';
 const idx=process.argv.indexOf('--config');
 const configPath=idx>=0?process.argv[idx+1]:process.env.HOMEMCP_CONFIG;
@@ -21,8 +22,14 @@ const log=new Log(path.join(dataDir,'logs'));
 if(config.egress?.enabled)throw new Error('Remote egress disabled while security/HITL remains development-only');
 const egress=new EgressManager(config.egress,log,dataDir);
 const security=new ApprovalStore(dataDir,{timeoutMs:config.security?.approvalTimeoutMs||600000});
-const passkeys=new PasskeyManager(dataDir,{rpID:config.security?.rpID||'localhost',origin:config.security?.rpOrigin||`http://localhost:${port}`});
+const configuredOrigin=config.publicUrl||config.security?.rpOrigin||`http://localhost:${port}`;
+const passkeys=new PasskeyManager(dataDir,{rpID:config.security?.rpID||new URL(configuredOrigin).hostname,origin:configuredOrigin});
 const policy=config.security?.policy||{};
+// A single per-installation HTTPS origin is used for both passkeys and OAuth.
+// Never infer issuer from request Host / Forwarded headers controlled by callers.
+const publicUrl=config.publicUrl||config.oauth?.issuer||config.security?.rpOrigin||null;
+if(publicUrl&&config.security?.rpOrigin&&new URL(publicUrl).origin!==new URL(config.security.rpOrigin).origin)throw new Error('public_url_passkey_origin_mismatch');
+const oauth=publicUrl?.startsWith('https://')&&config.oauth?.enabled!==false?new HomeOAuth(dataDir,publicUrl):null;
 const credentialVault=config.security?.credentialVaultEnabled===true?new CredentialVault(dataDir,path.join(path.dirname(fileURLToPath(import.meta.url)),'../scripts/credential-dpapi.ps1')):null;
 const credentialTools=[
  {name:'credential_save',description:'Encrypt and save a website credential for this Windows user. Explicitly binds HTTPS origin and username. Does not log or return password; overwrite requires replace=true.',inputSchema:{type:'object',properties:{origin:{type:'string'},username:{type:'string'},password:{type:'string'},replace:{type:'boolean'}},required:['origin','username','password'],additionalProperties:false}},
@@ -40,7 +47,10 @@ function validateDeletion(args){
 function deleteApprovedFile(args){const full=validateDeletion(args);fs.unlinkSync(full);return {content:[{type:'text',text:'Deleted exactly one file: '+full}],deleted:true,path:full};}
 const approvalTools=['approval_status','approval_resume','approval_result','approval_cancel'].map(name=>({name,description:'HomeMCP '+name,inputSchema:{type:'object',properties:{pending_id:{type:'string'},arguments_hash:{type:'string'}},required:['pending_id']}}));
 const tools=[...Object.entries(config.tools||{}).map(([name,v])=>({name,description:v.description||`HomeMCP ${name}`,inputSchema:v.inputSchema||{type:'object',properties:{}}})),fileDeleteTool,...(credentialVault?credentialTools:[]),...approvalTools];
-function safePreview(name,args){if(name==='file_delete'){try{return 'Delete exactly one regular file: '+validateDeletion(args)}catch{return null}}if(name==='browser_navigate'&&typeof args.url==='string'&&args.url.length<=2048&&/^https?:\/\//i.test(args.url))return 'Navigate browser to '+args.url;return null;}
+function safePreview(name,args){if(name==='file_delete'){try{return 'Delete exactly one regular file: '+validateDeletion(args)}catch{return null}}if(name==='browser_navigate'&&typeof args.url==='string'&&args.url.length<=2048&&/^https?:\/\//i.test(args.url))return 'Navigate browser to '+args.url;
+ if(name==='desktop_PowerShell'&&args&&typeof args.command==='string'&&args.command.length>0&&args.command.length<=4000&&!/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(args.command)&&Object.keys(args).every(k=>['command','timeout'].includes(k))&&(!('timeout' in args)||(Number.isInteger(args.timeout)&&args.timeout>=1&&args.timeout<=120)))return 'PowerShell command (approve exact text):\n'+args.command;
+ if(name==='desktop_App'&&args&&typeof args==='object'&&!Array.isArray(args)){const t=JSON.stringify(args);if(t.length<=2000&&Object.keys(args).every(k=>['mode','name','window_loc','window_size','executable','args','cwd'].includes(k)))return 'Desktop application action (approve exact arguments): '+t;}
+ return null;}
 
 const maxBody=512*1024;let shutting=false;
 const cookies=req=>Object.fromEntries((req.headers.cookie||'').split(';').map(s=>s.trim().split('=').map(decodeURIComponent)).filter(x=>x.length===2));
@@ -49,6 +59,30 @@ const originOK=req=>!!req.headers.origin&&req.headers.origin===passkeys.origin;
 const server=http.createServer(async(req,res)=>{
  const send=(status,obj)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(obj));};
  if(req.url==='/health'&&req.method==='GET')return send(200,{ok:!shutting,egress:egress.state,workers:Object.fromEntries([...workers].map(([name,w])=>[name,{status:w.status,childPid:w.child?.pid||null,failures:w.failures}]))});
+ const route=new URL(req.url||'/', 'http://localhost');
+ const pathname=route.pathname;
+ if(oauth){
+  if(req.method==='GET'&&(pathname==='/.well-known/oauth-protected-resource'||pathname==='/.well-known/oauth-protected-resource/mcp'))return send(200,oauth.protectedMetadata());
+  if(req.method==='GET'&&['/.well-known/oauth-authorization-server','/.well-known/openid-configuration'].includes(pathname))return send(200,oauth.metadata());
+  if(req.method==='GET'&&pathname==='/authorize'){
+   try{oauth.validateAuth(route.searchParams)}catch(e){return send(400,{error:e.message})}
+   res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'",'X-Content-Type-Options':'nosniff'});
+   return res.end(fs.readFileSync(new URL('../web/oauth.html',import.meta.url)));
+  }
+  if(req.method==='GET'&&pathname==='/oauth.js'){res.writeHead(200,{'Content-Type':'application/javascript','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});return res.end(fs.readFileSync(new URL('../web/oauth.js',import.meta.url)))}
+  if(req.method==='POST'&&pathname==='/register'){
+   let body;try{body=await readJSON(req);return send(201,oauth.register(body))}catch(e){return send(400,{error:e.message})}
+  }
+  if(req.method==='POST'&&pathname==='/oauth/consent'){
+   if(!passkeys.isSession(cookies(req).homemcp_session))return send(401,{error:'passkey_login_required'});
+   if(req.headers.origin!==oauth.issuer)return send(403,{error:'invalid_origin'});
+   try{const body=await readJSON(req);if(body.approve!==true||typeof body.request!=='string'||body.request.length>8192)throw Error('invalid_request');const auth=oauth.validateAuth(new URLSearchParams(body.request));const code=oauth.issueCode(auth);const redirect=new URL(auth.redirect);redirect.searchParams.set('code',code);if(auth.state)redirect.searchParams.set('state',auth.state);return send(200,{redirect:redirect.toString()})}catch(e){return send(400,{error:e.message})}
+  }
+  if(req.method==='POST'&&['/token','/revoke'].includes(pathname)){
+   let input='';for await(const chunk of req){input+=chunk;if(input.length>8192)return send(413,{error:'too_large'})}
+   try{const form=new URLSearchParams(input);if(pathname==='/token')return send(200,oauth.exchange(form));oauth.revoke(form.get('token'),form.get('client_id'));return send(200,{})}catch(e){return send(400,{error:e.message})}
+  }
+ }
  if(req.url?.startsWith('/auth/')){
   if(req.method!=='POST'||!originOK(req))return send(403,{error:'invalid_origin'});
   const bootstrap=adminAuthorized(req.headers.authorization,config.security?.adminToken);const session=cookies(req).homemcp_session;
@@ -101,7 +135,7 @@ const server=http.createServer(async(req,res)=>{
  }
  if(req.url!=='/mcp'||req.method!=='POST')return send(404,{error:'not_found'});
  const supplied=(req.headers.authorization||'').match(/^Bearer (.+)$/i)?.[1];
- if(!config.token||!tokenEqual(supplied,config.token))return send(401,{error:'unauthorized'});
+ if(!((config.token&&tokenEqual(supplied,config.token))||(oauth&&oauth.authorized(supplied)))){if(oauth)res.setHeader('WWW-Authenticate',`Bearer resource_metadata=\"${oauth.issuer}/.well-known/oauth-protected-resource\"`);return send(401,{error:'unauthorized'});}
  let buffer='';for await(const chunk of req){buffer+=chunk;if(Buffer.byteLength(buffer)>maxBody)return send(413,{error:'too_large'});}
  let msg;try{msg=JSON.parse(buffer);}catch{return send(400,{error:'bad_json'});}
  if(!msg||Array.isArray(msg)||msg.jsonrpc!=='2.0'||typeof msg.method!=='string')return send(400,{error:'invalid_request'});
