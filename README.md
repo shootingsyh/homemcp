@@ -33,14 +33,16 @@ The Windows MSI includes a lightweight tray manager with Start/Stop/Restart and 
 HomeMCP optionally exposes `credential_save` and `credential_fill` when
 `security.credentialVaultEnabled` is explicitly set to `true` in the installed
 configuration. An authenticated Muse client calls `credential_save` with the
-*exact HTTPS origin*, username and password. Passwords are encrypted using
+*HTTPS site*, username and password. Passwords are encrypted using
 Windows DPAPI CurrentUser before being stored in a separate SQLite database;
 existing credentials require `replace: true` to overwrite.
 
 `credential_fill` takes `origin`, `username`, `username_selector`, and
 `password_selector` (CSS selectors). The browser worker checks the *actual
-current page origin* and both unique, visible input types in the same browser
+current page hostname* and both unique, visible input types in the same browser
 execution before filling. Only a nonsecret fill status is returned. The site
 itself can read submitted credentials; use only trusted login origins. Password
 contents are never put into the standard Passkey approval queue. Normal
 browser tools cannot retrieve the vault; no plaintext export tool is provided.
+
+Credential scope uses the Public Suffix List registrable domain (eTLD+1), so login.example.co.uk and www.example.co.uk share a record, but unrelated co.uk sites do not. Exact-origin records from older versions remain readable from their original origin.

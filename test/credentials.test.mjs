@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {CredentialVault,normalizeOrigin,buildFillCode} from '../src/credentials.mjs';
+import {CredentialVault,normalizeOrigin,credentialDomain,buildFillCode} from '../src/credentials.mjs';
 
 test('strictly bind HTTPS website origin',()=>{
  assert.equal(normalizeOrigin('https://Example.COM/'),'https://example.com');
@@ -19,7 +19,7 @@ test('vault seals synthetic secret, binds origin and account; rejects overwrite'
  };
  const vault=new CredentialVault(folder,'mock.ps1',protector);
  try{
-  assert.deepEqual(await vault.save({origin:'https://example.com',username:'alice',password:'test-only'}),{stored:true,origin:'https://example.com',username:'alice',replaced:false});
+  assert.deepEqual(await vault.save({origin:'https://example.com',username:'alice',password:'test-only'}),{stored:true,origin:'example.com',username:'alice',replaced:false});
   assert.equal((await vault.secret('https://example.com','alice')).toString(),'test-only');
   await assert.rejects(vault.secret('https://example.org','alice'),/credential_not_found/);
   await assert.rejects(vault.save({origin:'https://example.com',username:'alice',password:'new-secret'}),/explicit_replace_required/);
@@ -30,8 +30,8 @@ test('vault seals synthetic secret, binds origin and account; rejects overwrite'
 });
 test('fill checks live page origin before touching either selector',()=>{
  const code=buildFillCode('https://example.com','alice','test-only','input[name=user]','input[type=password]');
- assert.ok(code.includes("location.origin!==v.site"));
- assert.ok(code.indexOf("location.origin!==v.site")<code.indexOf('setter.call'));
+ assert.ok(code.includes("location.hostname!==v.site"));
+ assert.ok(code.indexOf("location.hostname!==v.site")<code.indexOf('setter.call'));
  assert.ok(code.includes('selector_not_unique'));
  assert.ok(code.includes('not_password_field'));
  assert.throws(()=>buildFillCode('https://example.com','a','p','x','x'),/invalid_fill_target/);
@@ -43,4 +43,12 @@ test('secrets cannot enter standard approval persistence or logger',()=>{
  assert.ok(branch>0 && approval>branch);
  assert.ok(!server.slice(branch,approval).includes('security.create('));
  assert.ok(!server.slice(branch,approval).includes("log.write("));
+});
+
+test('public suffix rules group login subdomains without mixing registrable domains',()=>{
+ assert.equal(credentialDomain('https://login.delta.com'),'delta.com');
+ assert.equal(credentialDomain('https://www.delta.com'),'delta.com');
+ assert.equal(credentialDomain('https://login.example.co.uk'),'example.co.uk');
+ assert.notEqual(credentialDomain('https://login.example.co.uk'),credentialDomain('https://other.co.uk'));
+ assert.throws(()=>credentialDomain('https://co.uk'),/unregistrable_domain/);
 });

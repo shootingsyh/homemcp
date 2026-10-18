@@ -7,7 +7,7 @@ import {Worker,Log,rpcError,rpcResult,tokenEqual,freeLocalPort} from './core.mjs
 import {EgressManager} from './egress.mjs';
 import {ApprovalStore,adminAuthorized,policyFor} from './security.mjs';
 import {PasskeyManager} from './passkeys.mjs';
-import {CredentialVault,normalizeOrigin,buildFillCode} from './credentials.mjs';
+import {CredentialVault,credentialDomain,buildFillCode} from './credentials.mjs';
 const idx=process.argv.indexOf('--config');
 const configPath=idx>=0?process.argv[idx+1]:process.env.HOMEMCP_CONFIG;
 if(!configPath)throw new Error('Use --config <path>');
@@ -162,7 +162,7 @@ const server=http.createServer(async(req,res)=>{
       const output=await browser.call('browser_run_code',{code});
       const messages=Array.isArray(output?.content)?output.content.filter(item=>item?.type==='text').map(item=>item.text||'').join('\n'):'';
       if(output?.isError||!/(?:^|\n)\s*["']?HOMEMCP_CREDENTIAL_FILLED["']?\s*(?:\n|$)/.test(messages))throw new Error('browser_fill_unconfirmed');
-      result={filled:true,origin:normalizeOrigin(args.origin),username:args.username};
+      result={filled:true,domain:credentialDomain(args.origin),username:args.username};
      }catch{throw new Error('browser_fill_failed_or_unconfirmed')}
     }
     security.record('credential_tool_executed',name,null,'ok');

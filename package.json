@@ -1,6 +1,6 @@
 {
   "name": "homemcp",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "private": true,
   "type": "module",
   "engines": {
@@ -11,6 +11,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@simplewebauthn/server": "13.2.2"
+    "@simplewebauthn/server": "13.2.2",
+    "tldts": "^7.0.17"
   }
 }

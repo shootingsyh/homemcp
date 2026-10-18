@@ -3,6 +3,7 @@ import {spawn} from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import {getDomain} from 'tldts';
 
 export function normalizeOrigin(raw){
  if(typeof raw!=='string'||raw.length>512)throw new Error('invalid_origin');
@@ -11,6 +12,12 @@ export function normalizeOrigin(raw){
  if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash||url.pathname!=='/')throw new Error('https_origin_required');
  if(url.hostname==='localhost'||url.hostname.endsWith('.localhost')||url.hostname==='127.0.0.1')throw new Error('public_https_origin_required');
  return url.origin;
+}
+export function credentialDomain(origin){
+ const host=new URL(normalizeOrigin(origin)).hostname;
+ const domain=getDomain(host,{allowPrivateDomains:true});
+ if(!domain)throw new Error('unregistrable_domain');
+ return domain;
 }
 function validName(username){return typeof username==='string'&&username.length>0&&username.length<=320&&!/[\r\n\0]/.test(username)}
 function bindKey(origin,username){return Buffer.from(origin+'\0'+username,'utf8').toString('base64')}
@@ -34,7 +41,7 @@ export class CredentialVault{
   this.script=script;this.protect=protect;
  }
  async save({origin,username,password,replace=false}){
-  const site=normalizeOrigin(origin);
+  const site=credentialDomain(origin);
   if(!validName(username)||typeof password!=='string'||!password||password.length>4096||typeof replace!=='boolean')throw new Error('invalid_credentials');
   const existing=this.db.prepare('SELECT 1 FROM credentials WHERE origin=? AND username=?').get(site,username);
   if(existing&&!replace)throw new Error('credential_already_exists_explicit_replace_required');
@@ -45,22 +52,25 @@ export class CredentialVault{
   return {stored:true,origin:site,username,replaced:!!existing};
  }
  async secret(origin,username){
-  const site=normalizeOrigin(origin);
+  const site=credentialDomain(origin);
   if(!validName(username))throw new Error('invalid_username');
-  const row=this.db.prepare('SELECT ciphertext FROM credentials WHERE origin=? AND username=?').get(site,username);
+  let row=this.db.prepare('SELECT ciphertext FROM credentials WHERE origin=? AND username=?').get(site,username);
+  let binding=site;
+  // Retain support for exact-origin records written before domain-based storage.
+  if(!row){binding=normalizeOrigin(origin);row=this.db.prepare('SELECT ciphertext FROM credentials WHERE origin=? AND username=?').get(binding,username)}
   if(!row)throw new Error('credential_not_found');
-  return this.protect(this.script,'unprotect',bindKey(site,username),Buffer.from(row.ciphertext,'base64'));
+  return this.protect(this.script,'unprotect',bindKey(binding,username),Buffer.from(row.ciphertext,'base64'));
  }
  close(){this.db.close()}
 }
 function validSelector(x){return typeof x==='string'&&x.length>0&&x.length<=256&&!/[\r\n\0]/.test(x)}
 export function buildFillCode(origin,username,password,usernameSelector,passwordSelector){
- const site=normalizeOrigin(origin);
+ const site=credentialDomain(origin);
  if(!validName(username)||!validSelector(usernameSelector)||!validSelector(passwordSelector)||usernameSelector===passwordSelector)throw new Error('invalid_fill_target');
  // One in-page execution: origin validation and both writes cannot be separated by a navigation.
  const values={site,username,password,usernameSelector,passwordSelector};
  return `return await page.evaluate((v) => {
-  if(location.origin!==v.site)throw new Error('origin_mismatch');
+  if(location.protocol!=='https:'||(location.hostname!==v.site&&!location.hostname.endsWith('.'+v.site)))throw new Error('origin_mismatch');
   const pick=(css,type) => {
    const matches=document.querySelectorAll(css);
    if(matches.length!==1)throw new Error('selector_not_unique');
