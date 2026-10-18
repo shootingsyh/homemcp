@@ -41,9 +41,6 @@ if __name__ == "__main__":
 '@ | Set-Content "$root\build\windows_mcp_entry.py" -Encoding UTF8
 & $py -m PyInstaller --noconfirm --clean --onefile --name windows-mcp --collect-all windows_mcp --distpath "$payload\workers" --workpath "$root\build\pyinstaller-work" --specpath "$root\build" "$root\build\windows_mcp_entry.py"
 if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP PyInstaller failed' }
-dotnet publish "$root\native\JobRunner\JobRunner.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$root\build\jobrunner" 
-if ($LASTEXITCODE -ne 0) { throw 'JobRunner publish failed' }
-Copy-Item "$root\build\jobrunner\HomeMCP.JobRunner.exe" "$payload\runtime\HomeMCP.JobRunner.exe" -Force
 dotnet publish "$root\native\Manager\Manager.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$root\build\manager"
 if ($LASTEXITCODE -ne 0) { throw 'Manager publish failed' }
 Copy-Item "$root\build\manager\HomeMCP.Manager.exe" "$payload\runtime\HomeMCP.Manager.exe" -Force
