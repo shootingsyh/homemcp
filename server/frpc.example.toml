@@ -1,0 +1,15 @@
+# Run frpc on the HomeMCP user's machine, not on AWS.
+serverAddr = "YOUR_AWS_PUBLIC_IP_OR_NAME"
+serverPort = 7000
+
+auth.method = "token"
+auth.token = "REPLACE_WITH_THE_SAME_RANDOM_TOKEN"
+transport.tls.enable = true
+
+[[proxies]]
+name = "homemcp-private"
+type = "https"
+customDomains = ["homemcp.example.com"]
+localIP = "127.0.0.1"
+localPort = 8443
+# Local port MUST speak HTTPS and present a trusted certificate for homemcp.example.com.
