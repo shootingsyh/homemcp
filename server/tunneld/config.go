@@ -39,6 +39,15 @@ type Config struct {
 	// Empty disables the admin endpoint entirely.
 	AdminKey string
 
+	// MockPay enables the internal mock payment provider
+	// (TUNNELD_MOCK_PAY=1/true): enrollments return a local
+	// /mock-pay/<enrollment_id> checkout URL instead of a Stripe
+	// Checkout Session, and admin-only subscription-event hooks are
+	// registered for client development. It takes precedence over
+	// Stripe when both are set. NEVER enable in production — anyone
+	// holding an enrollment link can self-activate for free.
+	MockPay bool
+
 	// FRPSAddr / FRPSPort locate the frps control port for the frpc
 	// configs tunneld hands to clients at claim time.
 	FRPSAddr string
@@ -73,6 +82,7 @@ func LoadConfigFrom(getenv func(string) string) Config {
 		TunnelDomain:        envOr(getenv, "TUNNEL_DOMAIN", "tunnel.homemcp.si"),
 		APIPublicBase:       strings.TrimRight(envOr(getenv, "API_PUBLIC_BASE", "https://api.homemcp.si"), "/"),
 		AdminKey:            getenv("TUNNELD_ADMIN_KEY"),
+		MockPay:             parseBoolEnv(getenv("TUNNELD_MOCK_PAY")),
 		StripeSecretKey:     getenv("STRIPE_SECRET_KEY"),
 		StripeWebhookSecret: getenv("STRIPE_WEBHOOK_SECRET"),
 		StripePriceAnnual:   getenv("STRIPE_PRICE_ANNUAL"),
@@ -95,6 +105,16 @@ func envOr(getenv func(string) string, key, def string) string {
 		return v
 	}
 	return def
+}
+
+// parseBoolEnv interprets the small set of truthy env spellings tunneld
+// accepts ("1", "true", case-insensitive). Everything else is false.
+func parseBoolEnv(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true":
+		return true
+	}
+	return false
 }
 
 // StripeConfigured reports whether checkout can be created at all.

@@ -48,6 +48,7 @@ type User struct {
 	StripeSubscriptionID string    `json:"stripe_subscription_id,omitempty"`
 	SubStatus            string    `json:"sub_status"`
 	GraceUntil           time.Time `json:"grace_until,omitempty"`
+	TrialEnd             time.Time `json:"trial_end,omitempty"` // set while trialing
 	CurrentPeriodEnd     time.Time `json:"current_period_end,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 }

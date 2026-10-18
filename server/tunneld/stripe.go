@@ -50,6 +50,7 @@ type stripeSubscription struct {
 	Status           string
 	CustomerID       string
 	CurrentPeriodEnd time.Time
+	TrialEnd         time.Time
 }
 
 type stripeError struct {
@@ -180,6 +181,9 @@ func parseSubscription(obj map[string]any) stripeSubscription {
 	sub.ID, _ = obj["id"].(string)
 	sub.Status, _ = obj["status"].(string)
 	sub.CustomerID, _ = obj["customer"].(string)
+	if v, ok := unixField(obj["trial_end"]); ok {
+		sub.TrialEnd = v
+	}
 	if v, ok := unixField(obj["current_period_end"]); ok {
 		sub.CurrentPeriodEnd = v
 		return sub
@@ -328,12 +332,111 @@ func strField(obj map[string]any, key string) string {
 	return v
 }
 
+// activation is the outcome of a completed checkout — a real Stripe
+// Checkout Session or the internal mock pay page — reduced to the store
+// mutations it implies. activateEnrollment is the single funnel for
+// turning a pending enrollment into a claimable user, so the
+// enrollment -> activation -> claim path exists exactly once no matter
+// which payment front-end produced the payment.
+type activation struct {
+	status            string // tunneld sub-status vocabulary
+	customerID        string // Stripe customer ID ("" for mock pay)
+	subscriptionID    string // Stripe subscription ID ("" for mock pay)
+	checkoutSessionID string // recorded on the enrollment ("" for mock pay)
+	periodEnd         time.Time
+	trialEnd          time.Time
+}
+
+// activateEnrollment creates the user record if needed, applies the
+// activation, and marks the enrollment ready (claimable). Failures are
+// logged and leave the enrollment pending so a redelivery / repeat
+// activation can retry.
+func (s *Server) activateEnrollment(enr Enrollment, act activation) {
+	if _, err := s.store.EnsureUser(enr.Username, enr.Plan, s.cfg.SubdomainFor(enr.Username)); err != nil {
+		log.Printf("activate enrollment %s: ensure user %q: %v", enr.ID, enr.Username, err)
+		return
+	}
+	if err := s.store.UpdateUser(enr.Username, func(u *User) {
+		if act.customerID != "" {
+			u.StripeCustomerID = act.customerID
+		}
+		if act.subscriptionID != "" {
+			u.StripeSubscriptionID = act.subscriptionID
+		}
+		u.SubStatus = act.status
+		if !act.periodEnd.IsZero() {
+			u.CurrentPeriodEnd = act.periodEnd
+		}
+		if !act.trialEnd.IsZero() {
+			u.TrialEnd = act.trialEnd
+		}
+		if act.status == SubStatusActive || act.status == SubStatusTrialing {
+			u.GraceUntil = time.Time{}
+		}
+	}); err != nil {
+		log.Printf("activate enrollment %s: update user %q: %v", enr.ID, enr.Username, err)
+		return
+	}
+	if err := s.store.UpdateEnrollment(enr.ID, func(e *Enrollment) {
+		if act.checkoutSessionID != "" {
+			e.StripeCheckoutSessionID = act.checkoutSessionID
+		}
+		e.Status = EnrollmentReady
+	}); err != nil {
+		log.Printf("activate enrollment %s: update enrollment: %v", enr.ID, err)
+	}
+}
+
+// The markUser* helpers below are the subscription state transitions,
+// shared verbatim by the Stripe webhook handlers and the mock-pay test
+// hooks so a simulated event lands in exactly the state the real event
+// would produce.
+
+// markUserActive: payment is current again — active, grace cleared.
+func (s *Server) markUserActive(u User) {
+	_ = s.store.UpdateUser(u.Username, func(x *User) {
+		x.SubStatus = SubStatusActive
+		x.GraceUntil = time.Time{}
+	})
+}
+
+// markUserPastDue: payment failed — past_due with a fresh grace window.
+func (s *Server) markUserPastDue(u User) {
+	_ = s.store.UpdateUser(u.Username, func(x *User) {
+		x.SubStatus = SubStatusPastDue
+		x.GraceUntil = time.Now().UTC().Add(GracePeriod)
+	})
+}
+
+// markUserCanceled: subscription ended — access stops.
+func (s *Server) markUserCanceled(u User, periodEnd time.Time) {
+	_ = s.store.UpdateUser(u.Username, func(x *User) {
+		x.SubStatus = SubStatusCanceled
+		x.GraceUntil = time.Time{}
+		if !periodEnd.IsZero() {
+			x.CurrentPeriodEnd = periodEnd
+		}
+	})
+}
+
+// markUserTrialEnded: the trial converted (the first charge succeeded)
+// — a trialing user becomes active. No-op for any other status.
+func (s *Server) markUserTrialEnded(u User) {
+	_ = s.store.UpdateUser(u.Username, func(x *User) {
+		if x.SubStatus == SubStatusTrialing {
+			x.SubStatus = SubStatusActive
+			x.TrialEnd = time.Time{}
+		}
+	})
+}
+
 // onCheckoutSessionCompleted links an enrollment to the Stripe customer
-// and subscription, creates the user record, and marks the enrollment
-// claimable. The user's subscription status comes from the subscription
-// object itself (fetched fresh); if that fetch fails we fall back to the
-// session's payment_status (paid -> active, no_payment_required ->
-// trialing, which is exactly the annual-trial case).
+// and subscription and marks the enrollment claimable via
+// activateEnrollment. The user's subscription status comes from the
+// subscription object itself (fetched fresh); if that fetch fails we
+// fall back to the session's payment_status (paid -> active,
+// no_payment_required -> trialing, which is exactly the annual-trial
+// case).
 func (s *Server) onCheckoutSessionCompleted(obj map[string]any) {
 	enrollmentID := strField(obj, "client_reference_id")
 	if enrollmentID == "" {
@@ -349,17 +452,13 @@ func (s *Server) onCheckoutSessionCompleted(obj map[string]any) {
 	customerID := strField(obj, "customer")
 	subscriptionID := strField(obj, "subscription")
 
-	if _, err := s.store.EnsureUser(enr.Username, enr.Plan, s.cfg.SubdomainFor(enr.Username)); err != nil {
-		log.Printf("stripe webhook: ensure user %q: %v", enr.Username, err)
-		return
-	}
-
 	status := ""
-	var periodEnd time.Time
+	var periodEnd, trialEnd time.Time
 	if subscriptionID != "" && s.cfg.StripeSecretKey != "" {
 		if sub, err := s.fetchSubscription(subscriptionID); err == nil {
 			status = mapStripeStatus(sub.Status)
 			periodEnd = sub.CurrentPeriodEnd
+			trialEnd = sub.TrialEnd
 			if customerID == "" {
 				customerID = sub.CustomerID
 			}
@@ -378,26 +477,14 @@ func (s *Server) onCheckoutSessionCompleted(obj map[string]any) {
 		}
 	}
 
-	if err := s.store.UpdateUser(enr.Username, func(u *User) {
-		u.StripeCustomerID = customerID
-		u.StripeSubscriptionID = subscriptionID
-		u.SubStatus = status
-		if !periodEnd.IsZero() {
-			u.CurrentPeriodEnd = periodEnd
-		}
-		if status == SubStatusActive || status == SubStatusTrialing {
-			u.GraceUntil = time.Time{}
-		}
-	}); err != nil {
-		log.Printf("stripe webhook: update user %q: %v", enr.Username, err)
-		return
-	}
-	if err := s.store.UpdateEnrollment(enr.ID, func(e *Enrollment) {
-		e.StripeCheckoutSessionID = strField(obj, "id")
-		e.Status = EnrollmentReady
-	}); err != nil {
-		log.Printf("stripe webhook: update enrollment %q: %v", enr.ID, err)
-	}
+	s.activateEnrollment(enr, activation{
+		status:            status,
+		customerID:        customerID,
+		subscriptionID:    subscriptionID,
+		checkoutSessionID: strField(obj, "id"),
+		periodEnd:         periodEnd,
+		trialEnd:          trialEnd,
+	})
 }
 
 // resolveUserForInvoice finds the user for an invoice event. Invoices
@@ -446,6 +533,9 @@ func (s *Server) syncFromSubscription(u User) {
 		if !sub.CurrentPeriodEnd.IsZero() {
 			x.CurrentPeriodEnd = sub.CurrentPeriodEnd
 		}
+		if status == SubStatusTrialing && !sub.TrialEnd.IsZero() {
+			x.TrialEnd = sub.TrialEnd
+		}
 		switch status {
 		case SubStatusActive, SubStatusTrialing:
 			x.GraceUntil = time.Time{}
@@ -464,10 +554,7 @@ func (s *Server) onInvoicePaid(obj map[string]any) {
 		log.Printf("stripe webhook: invoice.paid for unknown customer")
 		return
 	}
-	_ = s.store.UpdateUser(u.Username, func(x *User) {
-		x.SubStatus = SubStatusActive
-		x.GraceUntil = time.Time{}
-	})
+	s.markUserActive(u)
 	s.syncFromSubscription(u)
 }
 
@@ -478,10 +565,7 @@ func (s *Server) onInvoicePaymentFailed(obj map[string]any) {
 		log.Printf("stripe webhook: invoice.payment_failed for unknown customer")
 		return
 	}
-	_ = s.store.UpdateUser(u.Username, func(x *User) {
-		x.SubStatus = SubStatusPastDue
-		x.GraceUntil = time.Now().UTC().Add(GracePeriod)
-	})
+	s.markUserPastDue(u)
 }
 
 // onSubscriptionSync mirrors customer.subscription.{created,updated}.
@@ -526,11 +610,5 @@ func (s *Server) onSubscriptionDeleted(obj map[string]any) {
 		log.Printf("stripe webhook: subscription.deleted for unknown subscription %q", sub.ID)
 		return
 	}
-	_ = s.store.UpdateUser(u.Username, func(x *User) {
-		x.SubStatus = SubStatusCanceled
-		x.GraceUntil = time.Time{}
-		if !sub.CurrentPeriodEnd.IsZero() {
-			x.CurrentPeriodEnd = sub.CurrentPeriodEnd
-		}
-	})
+	s.markUserCanceled(u, sub.CurrentPeriodEnd)
 }

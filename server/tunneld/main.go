@@ -69,6 +69,9 @@ func main() {
 
 	log.Printf("tunneld listening on %s (tunnel domain %s, stripe configured: %v, bandwidth cap: %q)",
 		cfg.ListenAddr, cfg.TunnelDomain, cfg.StripeConfigured(), cfg.BandwidthLimit)
+	if cfg.MockPay {
+		log.Printf("WARNING: MOCK PAY ENABLED — NOT FOR PRODUCTION: enrollments can be self-activated for free via /mock-pay/<id>; use on internal/dev deployments only")
+	}
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("tunneld: serve: %v", err)
 	}
@@ -87,6 +90,13 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/admin/users", s.handleAdminUsers)
 	// Stripe webhooks.
 	mux.HandleFunc("POST /webhooks/stripe", s.handleStripeWebhook)
+	// Mock pay (internal testing only): registered ONLY when mock mode
+	// is enabled, so in production these paths are plain 404s.
+	if s.cfg.MockPay {
+		mux.HandleFunc("GET /mock-pay/{id}", s.handleMockPayPage)
+		mux.HandleFunc("POST /mock-pay/{id}", s.handleMockPaySubmit)
+		mux.HandleFunc("POST /api/v1/mock/users/{username}/subscription-event", s.handleMockSubscriptionEvent)
+	}
 	// Liveness for compose/orchestrators.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

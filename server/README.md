@@ -90,6 +90,34 @@ token *hashes* and Stripe IDs, never plaintext tokens or card data.
 - **Cancel:** `customer.subscription.deleted` → `canceled` → access
   stops at the next login/proxy registration.
 
+## Mock pay (internal testing only)
+
+Setting `TUNNELD_MOCK_PAY=1` swaps Stripe for a built-in mock payment
+provider so the HomeMCP client's registration flow can be developed
+and tested before a real Stripe account exists:
+
+- `POST /api/v1/enrollments` performs no Stripe call and returns
+  `checkout_url = {API_PUBLIC_BASE}/mock-pay/<enrollment_id>`.
+- The mock checkout page (one **Pay (mock)** button) activates the
+  enrollment through the *same* activation funnel a
+  `checkout.session.completed` webhook uses — annual starts the 7-day
+  trial (`trial_end` recorded), monthly becomes `active` — so claim,
+  account, and the plugin gate all run the production code path.
+- An admin-only hook, `POST /api/v1/mock/users/<username>/subscription-event`
+  (`X-Admin-Key`, body `{"event": …}`), drives the same state
+  transitions as the Stripe webhooks: `invoice.paid`,
+  `invoice.payment_failed` (past_due + 3-day grace),
+  `subscription.deleted`, `trial.end`.
+- With mock pay off, none of these routes exist (plain 404s).
+  tunneld logs a loud startup warning whenever mock pay is on.
+
+> **⚠ NEVER enable mock pay in production.** Anyone who obtains an
+> enrollment link can open the mock page and activate that account
+> **for free** — there is no card, no charge, no identity check. Run
+> it only on internal/dev deployments (staging relay, LAN, localhost)
+> for client development, and double-check `TUNNELD_MOCK_PAY` is unset
+> (or `0`) before any public deployment.
+
 ## Phase 1 (owner-only) can run frps alone
 
 Before tunneld/Stripe are live, the relay works as a single-tenant

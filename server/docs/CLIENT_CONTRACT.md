@@ -59,7 +59,10 @@ POST /api/v1/enrollments
     trial ends.
   - **monthly** ($0.99/mo): no trial; the card is charged immediately.
 - Persist `enrollment_id` locally, then open `checkout_url` in the
-  system browser (it is a `checkout.stripe.com` URL).
+  system browser (normally a `checkout.stripe.com` URL; on internal
+  mock-pay test servers it points at the server's own `/mock-pay/…`
+  page instead — treat the URL as opaque either way, see
+  [Mock Pay](#mock-pay-internal-testing)).
 
 Errors: `422 invalid_username`, `422 username_reserved`,
 `409 username_taken`, `422 invalid_plan`, `503 stripe_not_configured`,
@@ -129,8 +132,11 @@ Authorization: Bearer <per-user token>
 ```
 
 `200` → `{ username, subdomain, plan, sub_status,
-current_period_end?, grace_until?, tunnel_allowed }`.
-Use it on app start and on a slow timer to drive the subscription UI
+current_period_end?, trial_end?, grace_until?, tunnel_allowed }`.
+`trial_end` is present while `trialing` when the server knows it
+(always for mock activations; for Stripe when the subscription reports
+it) — for a trial, `current_period_end` is the same instant. Use it on
+app start and on a slow timer to drive the subscription UI
 (table above). `tunnel_allowed` is the server's own gate evaluation —
 trust it over local inference.
 
@@ -149,6 +155,52 @@ server learns about them via webhooks (state may lag a few seconds).
 
 Errors: `401 unauthorized`, `409 no_billing_account`,
 `503 stripe_not_configured`, `502 stripe_error`.
+
+## Mock Pay (internal testing)
+
+Internal/dev servers may run with mock pay enabled
+(`TUNNELD_MOCK_PAY=1`, operator-side). **Production never does.** It
+exists so this client flow can be built and tested before a real
+Stripe account exists.
+
+From the client's perspective, exactly one thing differs:
+
+- The `checkout_url` returned by `POST /api/v1/enrollments` points at
+  `{API_PUBLIC_BASE}/mock-pay/{enrollment_id}` instead of
+  `checkout.stripe.com`. It is a plain HTML page (visually branded
+  "MOCK PAY — internal test only, no real charge") with a single
+  **Pay (mock)** button. Open it in the system browser exactly like a
+  Stripe Checkout URL; never special-case its host or content.
+
+Everything else is identical: the enrollment, poll/claim, account,
+and state semantics are the same endpoints with the same shapes,
+because the mock page activates the enrollment through the same
+server-side funnel as the Stripe webhook. Plan behaviour matches too:
+annual → `trialing` with `trial_end` = activation + 7 days (and
+`trial_end` set in the account view); monthly → `active` immediately.
+
+### Subscription-event test hook (operator/admin only)
+
+To exercise the states real Stripe webhooks produce, an admin-key
+holder (the server operator — not end users) can call:
+
+```
+POST /api/v1/mock/users/{username}/subscription-event
+X-Admin-Key: <operator key>
+{ "event": "invoice.payment_failed" }
+```
+
+| `event` | Resulting state |
+|---|---|
+| `trial.end` | `trialing` → `active` (stands in for the trial-conversion charge succeeding) |
+| `invoice.paid` | → `active`, `grace_until` cleared |
+| `invoice.payment_failed` | → `past_due`, `grace_until` = now + 3 days (tunnel keeps working until then; drive the "payment failed — update your card by {grace_until}" UI from it) |
+| `subscription.deleted` | → `canceled` (the plugin rejects the user's frpc at its next login/proxy registration; `tunnel_allowed` becomes `false`) |
+
+`200` → the resulting account view (same JSON as `GET /api/v1/account`).
+Errors: `404` for the whole route when mock pay is disabled,
+`401 unauthorized` without/with a wrong admin key,
+`404 user_not_found`, `422 invalid_event`.
 
 ## Admin (operator only, not for clients)
 
@@ -170,7 +222,7 @@ Stable codes: `bad_request`, `invalid_username`, `username_reserved`,
 `username_taken`, `invalid_plan`, `enrollment_not_found`,
 `unauthorized`, `no_billing_account`, `stripe_not_configured`,
 `stripe_error`, `admin_disabled`, `invalid_signature` (webhooks),
-`internal`.
+`user_not_found`, `invalid_event` (mock-pay test hook), `internal`.
 
 ## Security notes for client implementers
 

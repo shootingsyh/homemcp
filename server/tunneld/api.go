@@ -21,7 +21,7 @@ import (
 //   bad_request, invalid_username, username_reserved, username_taken,
 //   invalid_plan, enrollment_not_found, credentials_not_ready,
 //   unauthorized, no_billing_account, stripe_not_configured,
-//   admin_disabled, internal.
+//   admin_disabled, user_not_found, invalid_event, internal.
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -94,9 +94,11 @@ type createEnrollmentResponse struct {
 }
 
 // handleCreateEnrollment is POST /api/v1/enrollments.
-// Order matters: validate first, then Stripe-config check (so an
+// Order matters: validate first, then the payment-config check (so an
 // unconfigured server fails with 503 without squatting the username),
-// then reserve the enrollment, then create the Checkout Session.
+// then reserve the enrollment, then create the checkout. With mock pay
+// enabled (internal testing only) the config check is skipped and the
+// "checkout" is tunneld's own /mock-pay/<id> page instead of Stripe.
 func (s *Server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) {
 	var req createEnrollmentRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
@@ -117,7 +119,7 @@ func (s *Server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_plan", "plan must be \"annual\" or \"monthly\"")
 		return
 	}
-	if !s.cfg.StripeConfigured() {
+	if !s.cfg.MockPay && !s.cfg.StripeConfigured() {
 		writeAPIError(w, http.StatusServiceUnavailable, "stripe_not_configured", "billing is not configured on this server yet")
 		return
 	}
@@ -144,6 +146,21 @@ func (s *Server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		writeAPIError(w, http.StatusInternalServerError, "internal", "could not store enrollment")
+		return
+	}
+	if s.cfg.MockPay {
+		// Mock checkout: no Stripe call, no session ID. The client
+		// opens this URL in a browser exactly like a Stripe Checkout
+		// URL; the page there activates the enrollment through the
+		// same funnel a webhook would (see mockpay.go).
+		writeJSON(w, http.StatusCreated, createEnrollmentResponse{
+			EnrollmentID: enr.ID,
+			CheckoutURL:  s.cfg.APIPublicBase + "/mock-pay/" + enr.ID,
+			Status:       enr.Status,
+			Username:     username,
+			Plan:         req.Plan,
+			Subdomain:    s.cfg.SubdomainFor(username),
+		})
 		return
 	}
 	sessionID, checkoutURL, err := s.createCheckoutSession(enr)
@@ -305,6 +322,7 @@ type accountView struct {
 	Plan             string `json:"plan"`
 	SubStatus        string `json:"sub_status"`
 	CurrentPeriodEnd string `json:"current_period_end,omitempty"` // RFC3339, when known
+	TrialEnd         string `json:"trial_end,omitempty"`          // set only while trialing, when known
 	GraceUntil       string `json:"grace_until,omitempty"`        // set only while past_due
 	TunnelAllowed    bool   `json:"tunnel_allowed"`
 }
@@ -320,6 +338,9 @@ func accountViewOf(u User) accountView {
 	}
 	if !u.CurrentPeriodEnd.IsZero() {
 		v.CurrentPeriodEnd = u.CurrentPeriodEnd.Format(time.RFC3339)
+	}
+	if u.SubStatus == SubStatusTrialing && !u.TrialEnd.IsZero() {
+		v.TrialEnd = u.TrialEnd.Format(time.RFC3339)
 	}
 	if u.SubStatus == SubStatusPastDue && !u.GraceUntil.IsZero() {
 		v.GraceUntil = u.GraceUntil.Format(time.RFC3339)
@@ -368,20 +389,32 @@ type adminUserView struct {
 	StripeCustomerID     string `json:"stripe_customer_id,omitempty"`
 	StripeSubscriptionID string `json:"stripe_subscription_id,omitempty"`
 	CurrentPeriodEnd     string `json:"current_period_end,omitempty"`
+	TrialEnd             string `json:"trial_end,omitempty"`
 	GraceUntil           string `json:"grace_until,omitempty"`
 	CreatedAt            string `json:"created_at"`
+}
+
+// requireAdmin enforces the X-Admin-Key gate shared by the admin API
+// and the mock-pay test hooks. On failure it writes the error response
+// (503 admin_disabled when no key is configured, 401 unauthorized on a
+// missing/wrong key) and returns false.
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.cfg.AdminKey == "" {
+		writeAPIError(w, http.StatusServiceUnavailable, "admin_disabled", "admin API is disabled (no TUNNELD_ADMIN_KEY set)")
+		return false
+	}
+	got := r.Header.Get("X-Admin-Key")
+	if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.AdminKey)) != 1 {
+		writeAPIError(w, http.StatusUnauthorized, "unauthorized", "invalid admin key")
+		return false
+	}
+	return true
 }
 
 // handleAdminUsers is GET /api/v1/admin/users (X-Admin-Key). Token
 // hashes are never exposed — the view struct simply has no field for them.
 func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.AdminKey == "" {
-		writeAPIError(w, http.StatusServiceUnavailable, "admin_disabled", "admin API is disabled (no TUNNELD_ADMIN_KEY set)")
-		return
-	}
-	got := r.Header.Get("X-Admin-Key")
-	if subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.AdminKey)) != 1 {
-		writeAPIError(w, http.StatusUnauthorized, "unauthorized", "invalid admin key")
+	if !s.requireAdmin(w, r) {
 		return
 	}
 	users := s.store.ListUsers()
@@ -398,6 +431,9 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if !u.CurrentPeriodEnd.IsZero() {
 			v.CurrentPeriodEnd = u.CurrentPeriodEnd.Format(time.RFC3339)
+		}
+		if !u.TrialEnd.IsZero() {
+			v.TrialEnd = u.TrialEnd.Format(time.RFC3339)
 		}
 		if !u.GraceUntil.IsZero() {
 			v.GraceUntil = u.GraceUntil.Format(time.RFC3339)
