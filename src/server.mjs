@@ -1,3 +1,4 @@
+import {validateDeletionPath} from './platform/file-security.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,23 +32,10 @@ const credentialTools=[
 async function saveConfig(){const tmp=configPath+'.tmp-'+process.pid;fs.writeFileSync(tmp,JSON.stringify(config,null,2),{mode:0o600});fs.renameSync(tmp,configPath);}
 const workers=new Map((config.workers||[]).map(w=>[w.name,new Worker(w,log,saveConfig)]));
 for(const [name,worker] of workers)worker.spec.env={...(worker.spec.env||{}),HOMEMCP_INSTALLATION_ID:config.installationId||'legacy-dev',HOMEMCP_WORKER_ROLE:name};
-const fileDeleteTool={name:'file_delete',description:'Delete one existing regular file after explicit Passkey approval. No directories or symlinks.',inputSchema:{type:'object',properties:{path:{type:'string',description:'Absolute Windows file path'}},required:['path'],additionalProperties:false}};
+const fileDeleteTool={name:'file_delete',description:'Delete one existing regular file after explicit Passkey approval. No directories or symlinks. Path is platform-native.',inputSchema:{type:'object',properties:{path:{type:'string',description:'Absolute path inside the current user home directory'}},required:['path'],additionalProperties:false}};
 function validateDeletion(args){
  if(!args||typeof args.path!=='string'||Object.keys(args).some(k=>k!=='path'))throw new Error('invalid_file_delete_arguments');
- const raw=args.path;
- if(!path.win32.isAbsolute(raw)||raw.startsWith('\\\\')||raw.includes('\0')||raw.includes('/')||raw.endsWith('\\'))throw new Error('invalid_absolute_windows_path');
- const full=path.win32.normalize(raw);
- const home=path.win32.normalize(os.homedir());
- const rel=path.win32.relative(home,full);
- if(!rel||rel==='..'||rel.startsWith('..\\')||path.win32.isAbsolute(rel))throw new Error('file_outside_user_home');
- const stat=fs.lstatSync(full);
- if(!stat.isFile()||stat.isSymbolicLink())throw new Error('not_regular_file');
- // A junction or directory symlink inside home must not redirect deletion outside home.
- const canonicalHome=fs.realpathSync.native(home);
- const canonicalFile=fs.realpathSync.native(full);
- const canonicalRel=path.win32.relative(canonicalHome,canonicalFile);
- if(!canonicalRel||canonicalRel==='..'||canonicalRel.startsWith('..\\')||path.win32.isAbsolute(canonicalRel))throw new Error('file_outside_user_home');
- return full;
+ return validateDeletionPath(args.path);
 }
 function deleteApprovedFile(args){const full=validateDeletion(args);fs.unlinkSync(full);return {content:[{type:'text',text:'Deleted exactly one file: '+full}],deleted:true,path:full};}
 const approvalTools=['approval_status','approval_resume','approval_result','approval_cancel'].map(name=>({name,description:'HomeMCP '+name,inputSchema:{type:'object',properties:{pending_id:{type:'string'},arguments_hash:{type:'string'}},required:['pending_id']}}));
