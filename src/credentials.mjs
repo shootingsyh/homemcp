@@ -66,7 +66,7 @@ export class CredentialVault{
 function validSelector(x){return typeof x==='string'&&x.length>0&&x.length<=256&&!/[\r\n\0]/.test(x)}
 export function buildFillCode(origin,username,password,usernameSelector,passwordSelector){
  const site=credentialDomain(origin);
- if(!validName(username)||!validSelector(usernameSelector)||!validSelector(passwordSelector)||usernameSelector===passwordSelector)throw new Error('invalid_fill_target');
+ if(!validName(username)||(!usernameSelector&&!passwordSelector)||(usernameSelector&&!validSelector(usernameSelector))||(passwordSelector&&!validSelector(passwordSelector))||(usernameSelector&&passwordSelector&&usernameSelector===passwordSelector))throw new Error('invalid_fill_target');
  // One in-page execution: origin validation and both writes cannot be separated by a navigation.
  const values={site,username,password,usernameSelector,passwordSelector};
  return `() => {
@@ -81,9 +81,11 @@ export function buildFillCode(origin,username,password,usernameSelector,password
    if(type==='username'&&!['text','email'].includes(field.type))throw new Error('not_username_field');
    return field;
   };
-  const u=pick(v.usernameSelector,'username'),p=pick(v.passwordSelector,'password');
+  const targets=[];
+  if(v.usernameSelector)targets.push([pick(v.usernameSelector,'username'),v.username]);
+  if(v.passwordSelector)targets.push([pick(v.passwordSelector,'password'),v.password]);
   const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
-  for(const [field,value] of [[u,v.username],[p,v.password]]) {
+  for(const [field,value] of targets) {
    setter.call(field,value);
    field.dispatchEvent(new Event('input',{bubbles:true}));
    field.dispatchEvent(new Event('change',{bubbles:true}));
@@ -115,9 +117,12 @@ export function classifyBrowserFillError(output){
  const body=Array.isArray(output.content)?output.content.filter(x=>x?.type==='text').map(x=>x.text||'').join('\n'):'';
  const result=body.includes('### Result')?body.split('### Result')[1].split('###')[0].trim():'';
  if(!output.isError&&result==='"HOMEMCP_CREDENTIAL_FILLED"')return null;
+ // Never search the echoed tool source code for error markers: it contains the
+ // literals used by the error branches and will manufacture false positives.
+ const reported=body.split('### Ran Playwright code')[0];
  for(const reason of ['origin_mismatch','selector_not_unique','invalid_input','not_password_field','not_username_field','invalid_selector']){
-  if(body.includes(reason))return reason;
+  if(reported.includes(reason))return reason;
  }
- if(/about:blank|No open pages|Target page/.test(body))return 'browser_page_unavailable';
+ if(/about:blank|No open pages|Target page/.test(reported))return 'browser_page_unavailable';
  return 'browser_execution_unconfirmed';
 }
