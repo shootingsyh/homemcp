@@ -1,0 +1,37 @@
+name: macOS portable core
+on:
+  push:
+    branches: [main, feat/macos-platform-foundation-20261017]
+  pull_request:
+jobs:
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Build native Keychain helper
+        run: swiftc native/macos/keychain-helper.swift -framework Security -o native/macos/home-mcp-keychain
+      - name: Prepare Playwright MCP worker
+        run: |
+          mkdir -p build/macos-worker
+          npm install --prefix build/macos-worker --no-audit --no-fund --ignore-scripts --save=false @playwright/mcp@0.0.48
+      - name: Host integration smoke
+        run: sh scripts/macos/smoke-host.sh
+      - name: Portable core tests
+        run: node --test test/*.test.mjs
+      - name: Syntax check
+        run: |
+          node --check src/server.mjs
+          node --check src/credentials.mjs
+          node --check src/platform/file-security.mjs
+          node --check src/platform/credential-protector.mjs
+          node --check scripts/macos/provision.mjs
+          node --check scripts/macos/write-launch-agent.mjs
