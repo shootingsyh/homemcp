@@ -21,10 +21,27 @@ export class McpClient {
  const res=await fetch(this.url,{method:'POST',headers,body:JSON.stringify(body),signal:AbortSignal.timeout(this.timeoutMs)});
  if(res.status===404&&this.session){this.session=null;throw new Error('upstream_session_lost');}
  if(!res.ok)throw new Error(`upstream_http_${res.status}`);const session=res.headers.get('mcp-session-id');if(session)this.session=session;
- if(notification)return null;const ct=res.headers.get('content-type')||'';const bodyText=await res.text();let out;
- if(ct.includes('text/event-stream')){for(const frame of bodyText.replaceAll('\r\n','\n').split('\n\n')){const data=frame.split('\n').filter(x=>x.startsWith('data:')).map(x=>x.slice(5).trimStart()).join('\n');if(!data)continue;try{const obj=JSON.parse(data);if(obj.id===id){out=obj;break;}}catch{}}}
- else out=JSON.parse(bodyText);
- if(!out)throw new Error('upstream_missing_response');if(out.error)throw new Error(`upstream_rpc_${out.error.code}: ${out.error.message}`);return out.result;
+ if(notification)return null;
+ const ct=res.headers.get('content-type')||'';
+ const bodyText=await res.text();
+ let out;
+ if(ct.includes('text/event-stream')){
+  // SSE can contain comments, keep-alives and multiple data lines. Never log payloads.
+  for(const frame of bodyText.replaceAll('\r\n','\n').replaceAll('\r','\n').split('\n\n')){
+   const data=frame.split('\n').filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trimStart()).join('\n');
+   if(!data)continue;
+   let obj;try{obj=JSON.parse(data)}catch{continue}
+   if(obj&&Object.hasOwn(obj,'id')&&String(obj.id)===String(id)){out=obj;break}
+  }
+ }else{
+  try{out=JSON.parse(bodyText)}catch{throw new Error('upstream_invalid_json')}
+ }
+ if(!out){
+  this.log.write('warn','upstream_response_unmatched',{method,status:res.status,contentType:ct.split(';')[0],bytes:Buffer.byteLength(bodyText),requestId:id});
+  throw new Error(method==='tools/call'?'upstream_execution_uncertain':'upstream_missing_response');
+ }
+ if(out.error)throw new Error(`upstream_rpc_${out.error.code}: ${out.error.message}`);
+ return out.result;
  }
  async connect(){this.session=null;const result=await this.request('initialize',{protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'homemcp',version:'0.1.0'}});await this.request('notifications/initialized',{},true);return result;}
 }

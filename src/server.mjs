@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import {fileURLToPath} from 'node:url';
 import {Worker,Log,rpcError,rpcResult,tokenEqual,freeLocalPort} from './core.mjs';
 import {EgressManager} from './egress.mjs';
 import {ApprovalStore,adminAuthorized,policyFor} from './security.mjs';
@@ -23,9 +24,28 @@ const policy=config.security?.policy||{};
 async function saveConfig(){const tmp=configPath+'.tmp-'+process.pid;fs.writeFileSync(tmp,JSON.stringify(config,null,2),{mode:0o600});fs.renameSync(tmp,configPath);}
 const workers=new Map((config.workers||[]).map(w=>[w.name,new Worker(w,log,saveConfig)]));
 for(const [name,worker] of workers)worker.spec.env={...(worker.spec.env||{}),HOMEMCP_INSTALLATION_ID:config.installationId||'legacy-dev',HOMEMCP_WORKER_ROLE:name};
+const fileDeleteTool={name:'file_delete',description:'Delete one existing regular file after explicit Passkey approval. No directories or symlinks.',inputSchema:{type:'object',properties:{path:{type:'string',description:'Absolute Windows file path'}},required:['path'],additionalProperties:false}};
+function validateDeletion(args){
+ if(!args||typeof args.path!=='string'||Object.keys(args).some(k=>k!=='path'))throw new Error('invalid_file_delete_arguments');
+ const raw=args.path;
+ if(!path.win32.isAbsolute(raw)||raw.startsWith('\\\\')||raw.includes('\0')||raw.includes('/')||raw.endsWith('\\'))throw new Error('invalid_absolute_windows_path');
+ const full=path.win32.normalize(raw);
+ const home=path.win32.normalize(os.homedir());
+ const rel=path.win32.relative(home,full);
+ if(!rel||rel==='..'||rel.startsWith('..\\')||path.win32.isAbsolute(rel))throw new Error('file_outside_user_home');
+ const stat=fs.lstatSync(full);
+ if(!stat.isFile()||stat.isSymbolicLink())throw new Error('not_regular_file');
+ // A junction or directory symlink inside home must not redirect deletion outside home.
+ const canonicalHome=fs.realpathSync.native(home);
+ const canonicalFile=fs.realpathSync.native(full);
+ const canonicalRel=path.win32.relative(canonicalHome,canonicalFile);
+ if(!canonicalRel||canonicalRel==='..'||canonicalRel.startsWith('..\\')||path.win32.isAbsolute(canonicalRel))throw new Error('file_outside_user_home');
+ return full;
+}
+function deleteApprovedFile(args){const full=validateDeletion(args);fs.unlinkSync(full);return {content:[{type:'text',text:'Deleted exactly one file: '+full}],deleted:true,path:full};}
 const approvalTools=['approval_status','approval_resume','approval_result','approval_cancel'].map(name=>({name,description:'HomeMCP '+name,inputSchema:{type:'object',properties:{pending_id:{type:'string'},arguments_hash:{type:'string'}},required:['pending_id']}}));
-const tools=[...Object.entries(config.tools||{}).map(([name,v])=>({name,description:v.description||`HomeMCP ${name}`,inputSchema:v.inputSchema||{type:'object',properties:{}}})),...approvalTools];
-function safePreview(name,args){if(name==='browser_navigate'&&typeof args.url==='string'&&args.url.length<=2048&&/^https?:\/\//i.test(args.url))return 'Navigate browser to '+args.url;return null;}
+const tools=[...Object.entries(config.tools||{}).map(([name,v])=>({name,description:v.description||`HomeMCP ${name}`,inputSchema:v.inputSchema||{type:'object',properties:{}}})),fileDeleteTool,...approvalTools];
+function safePreview(name,args){if(name==='file_delete'){try{return 'Delete exactly one regular file: '+validateDeletion(args)}catch{return null}}if(name==='browser_navigate'&&typeof args.url==='string'&&args.url.length<=2048&&/^https?:\/\//i.test(args.url))return 'Navigate browser to '+args.url;return null;}
 
 const maxBody=512*1024;let shutting=false;
 const cookies=req=>Object.fromEntries((req.headers.cookie||'').split(';').map(s=>s.trim().split('=').map(decodeURIComponent)).filter(x=>x.length===2));
@@ -106,11 +126,23 @@ const server=http.createServer(async(req,res)=>{
    if(name==='approval_cancel'){result={status:security.cancel(id)||known.status};break;}
    const claimed=security.claim(id,args.arguments_hash);
    if(!claimed){result={...security.result(id),message:'Not approved or already claimed; query approval_result for outcome'};break;}
+   if(claimed.tool==='file_delete'){
+    try{const output=deleteApprovedFile(claimed.args);security.finish(id,output,null);}
+    catch(e){security.finish(id,null,e.message);}
+    result=security.result(id);break;
+   }
    const original=config.tools?.[claimed.tool];const w=workers.get(original?.worker);
    if(!w){security.finish(id,null,'worker_not_configured');result=security.result(id);break;}
    try{const output=await w.call(original.upstream,claimed.args);security.finish(id,output,null);}
    catch(e){security.finish(id,null,e.message);}
    result=security.result(id);break;
+  }
+  if(name==='file_delete'){
+   const preview=safePreview(name,args);
+   if(!preview)return send(200,rpcError(msg.id,-32602,'File must be an existing regular file inside the Windows user home directory'));
+   const approval=security.create(name,args,preview,msg.params?.idempotency_key||null);
+   result={status:'approval_required',pending_id:approval.id,tool:name,summary:preview,arguments_hash:approval.arguments_hash,expires_at:approval.expires_at,approval_url:'/approval?pending_id='+approval.id};
+   break;
   }
   const map=config.tools?.[name];if(!map)return send(200,rpcError(msg.id,-32602,'Unknown tool'));
   const worker=workers.get(map.worker);if(!worker)return send(200,rpcError(msg.id,-32603,'Worker not configured'));
