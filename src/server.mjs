@@ -26,7 +26,7 @@ const credentialVault=config.security?.credentialVaultEnabled===true?new Credent
 const credentialTools=[
  {name:'credential_save',description:'Encrypt and save a website credential for this Windows user. Explicitly binds HTTPS origin and username. Does not log or return password; overwrite requires replace=true.',inputSchema:{type:'object',properties:{origin:{type:'string'},username:{type:'string'},password:{type:'string'},replace:{type:'boolean'}},required:['origin','username','password'],additionalProperties:false}},
  {name:'credential_diagnose',description:'Inspect browser frame origins and CSS selector matches without accessing saved passwords.',inputSchema:{type:'object',properties:{origin:{type:'string'},username_selector:{type:'string'},password_selector:{type:'string'}},required:['origin','username_selector','password_selector'],additionalProperties:false}},
- {name:'credential_fill',description:'Fill saved username/password into explicitly specified CSS input selectors only when the current browser page has the exact saved HTTPS origin. Never returns a password.',inputSchema:{type:'object',properties:{origin:{type:'string'},username:{type:'string'},username_selector:{type:'string'},password_selector:{type:'string'}},required:['origin','username','username_selector','password_selector'],additionalProperties:false}}
+ {name:'credential_fill',description:'Fill a saved credential into current HTTPS page. CSS selectors can target username and password together, or provide one selector for multi-step login (email then password). Never returns the password.',inputSchema:{type:'object',properties:{origin:{type:'string'},username:{type:'string'},username_selector:{type:'string'},password_selector:{type:'string'}},required:['origin','username'],additionalProperties:false}}
 ];
 async function saveConfig(){const tmp=configPath+'.tmp-'+process.pid;fs.writeFileSync(tmp,JSON.stringify(config,null,2),{mode:0o600});fs.renameSync(tmp,configPath);}
 const workers=new Map((config.workers||[]).map(w=>[w.name,new Worker(w,log,saveConfig)]));
@@ -177,7 +177,7 @@ const server=http.createServer(async(req,res)=>{
       const output=await browser.call('browser_evaluate',{function:code});
       const reason=classifyBrowserFillError(output);
       if(reason)throw new Error(reason);
-      result={filled:true,domain:credentialDomain(args.origin),username:args.username};
+      result={filled:true,domain:credentialDomain(args.origin),username:args.username,fields:[...(args.username_selector?['username']:[]),...(args.password_selector?['password']:[])]};
      }catch(e){throw new Error(['origin_mismatch','selector_not_unique','invalid_input','not_password_field','not_username_field','invalid_selector','browser_page_unavailable','browser_execution_unconfirmed'].includes(e.message)?e.message:'browser_fill_failed_or_unconfirmed')}
     }
     security.record('credential_tool_executed',name,null,'ok');
