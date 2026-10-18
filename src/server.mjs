@@ -7,7 +7,7 @@ import {Worker,Log,rpcError,rpcResult,tokenEqual,freeLocalPort} from './core.mjs
 import {EgressManager} from './egress.mjs';
 import {ApprovalStore,adminAuthorized,policyFor} from './security.mjs';
 import {PasskeyManager} from './passkeys.mjs';
-import {CredentialVault,credentialDomain,buildFillCode} from './credentials.mjs';
+import {CredentialVault,credentialDomain,buildFillCode,buildDiagnoseCode,classifyBrowserFillError} from './credentials.mjs';
 const idx=process.argv.indexOf('--config');
 const configPath=idx>=0?process.argv[idx+1]:process.env.HOMEMCP_CONFIG;
 if(!configPath)throw new Error('Use --config <path>');
@@ -25,6 +25,7 @@ const policy=config.security?.policy||{};
 const credentialVault=config.security?.credentialVaultEnabled===true?new CredentialVault(dataDir,path.join(path.dirname(fileURLToPath(import.meta.url)),'../scripts/credential-dpapi.ps1')):null;
 const credentialTools=[
  {name:'credential_save',description:'Encrypt and save a website credential for this Windows user. Explicitly binds HTTPS origin and username. Does not log or return password; overwrite requires replace=true.',inputSchema:{type:'object',properties:{origin:{type:'string'},username:{type:'string'},password:{type:'string'},replace:{type:'boolean'}},required:['origin','username','password'],additionalProperties:false}},
+ {name:'credential_diagnose',description:'Inspect browser frame origins and CSS selector matches without accessing saved passwords.',inputSchema:{type:'object',properties:{origin:{type:'string'},username_selector:{type:'string'},password_selector:{type:'string'}},required:['origin','username_selector','password_selector'],additionalProperties:false}},
  {name:'credential_fill',description:'Fill saved username/password into explicitly specified CSS input selectors only when the current browser page has the exact saved HTTPS origin. Never returns a password.',inputSchema:{type:'object',properties:{origin:{type:'string'},username:{type:'string'},username_selector:{type:'string'},password_selector:{type:'string'}},required:['origin','username','username_selector','password_selector'],additionalProperties:false}}
 ];
 async function saveConfig(){const tmp=configPath+'.tmp-'+process.pid;fs.writeFileSync(tmp,JSON.stringify(config,null,2),{mode:0o600});fs.renameSync(tmp,configPath);}
@@ -143,14 +144,28 @@ const server=http.createServer(async(req,res)=>{
    catch(e){security.finish(id,null,e.message);}
    result=security.result(id);break;
   }
-  if(name==='credential_save'||name==='credential_fill'){
+  if(name==='credential_save'||name==='credential_fill'||name==='credential_diagnose'){
    if(!credentialVault)return send(200,rpcError(msg.id,-32003,'Credential vault not enabled'));
    try{
     if(!args||typeof args!=='object'||Array.isArray(args))throw new Error('invalid_arguments');
-    const expected=name==='credential_save'?['origin','username','password','replace']:['origin','username','username_selector','password_selector'];
+    const expected=name==='credential_save'?['origin','username','password','replace']:name==='credential_diagnose'?['origin','username_selector','password_selector']:['origin','username','username_selector','password_selector'];
     if(Object.keys(args).some(k=>!expected.includes(k)))throw new Error('invalid_arguments');
     if(name==='credential_save'){
      result=await credentialVault.save(args);
+    }else if(name==='credential_diagnose'){
+     const browser=workers.get('browser');
+     if(!browser)throw new Error('browser_not_configured');
+     const output=await browser.call('browser_evaluate',{function:buildDiagnoseCode(args.origin,args.username_selector,args.password_selector)});
+     if(output?.isError)throw new Error('browser_inspection_unavailable');
+     const text=Array.isArray(output?.content)?output.content.filter(x=>x?.type==='text').map(x=>x.text||'').join('\n'):'';
+     let diagnostic=null;
+     const marker=text.indexOf('### Result');
+     if(marker>=0){
+      const fragment=text.slice(marker+'### Result'.length).split('###')[0].trim();
+      try{const parsed=JSON.parse(fragment);if(parsed?.frames)diagnostic=parsed}catch{}
+     }
+     if(!diagnostic)throw new Error('browser_inspection_unavailable');
+     result={ok:true,...diagnostic};
     }else{
      const secret=await credentialVault.secret(args.origin,args.username);
      let code;
@@ -159,17 +174,17 @@ const server=http.createServer(async(req,res)=>{
      const browser=workers.get('browser');
      if(!browser)throw new Error('browser_not_configured');
      try{
-      const output=await browser.call('browser_run_code',{code});
-      const messages=Array.isArray(output?.content)?output.content.filter(item=>item?.type==='text').map(item=>item.text||'').join('\n'):'';
-      if(output?.isError||!/(?:^|\n)\s*["']?HOMEMCP_CREDENTIAL_FILLED["']?\s*(?:\n|$)/.test(messages))throw new Error('browser_fill_unconfirmed');
+      const output=await browser.call('browser_evaluate',{function:code});
+      const reason=classifyBrowserFillError(output);
+      if(reason)throw new Error(reason);
       result={filled:true,domain:credentialDomain(args.origin),username:args.username};
-     }catch{throw new Error('browser_fill_failed_or_unconfirmed')}
+     }catch(e){throw new Error(['origin_mismatch','selector_not_unique','invalid_input','not_password_field','not_username_field','invalid_selector','browser_page_unavailable','browser_execution_unconfirmed'].includes(e.message)?e.message:'browser_fill_failed_or_unconfirmed')}
     }
     security.record('credential_tool_executed',name,null,'ok');
    }catch(e){
     // Never serialize upstream tool errors or original arguments; they may contain credentials.
     security.record('credential_tool_executed',name,null,'failed');
-    result={ok:false,error:['credential_already_exists_explicit_replace_required','credential_not_found','invalid_credentials','invalid_arguments','invalid_origin','https_origin_required','public_https_origin_required','invalid_username','invalid_fill_target'].includes(e.message)?e.message:'credential_operation_failed'};
+    result={ok:false,error:['credential_already_exists_explicit_replace_required','credential_not_found','invalid_credentials','invalid_arguments','invalid_origin','https_origin_required','public_https_origin_required','invalid_username','invalid_fill_target','origin_mismatch','selector_not_unique','invalid_input','not_password_field','not_username_field','invalid_selector','browser_page_unavailable','browser_execution_unconfirmed','browser_inspection_unavailable'].includes(e.message)?e.message:'credential_operation_failed'};
    }
    break;
   }
