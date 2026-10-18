@@ -6,7 +6,7 @@ const token=()=>crypto.randomBytes(32).toString('base64url');
 const safeEqual=(a,b)=>typeof a==='string'&&typeof b==='string'&&crypto.timingSafeEqual(Buffer.from(digest(a)),Buffer.from(digest(b)));
 const allowedRedirect=s=>{try{const u=new URL(s);return !u.username&&!u.password&&!u.hash&&((u.protocol==='https:')||(u.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(u.hostname)));}catch{return false}};
 export class HomeOAuth{
- constructor(dataDir,issuer){const u=new URL(issuer);if(u.protocol!=='https:'||u.pathname!=='/'||u.search||u.hash)throw Error('oauth_https_issuer_required');this.issuer=u.origin;this.resource=this.issuer+'/mcp';this.db=new DatabaseSync(path.join(dataDir,'oauth.sqlite'));this.db.exec(`PRAGMA journal_mode=WAL;
+ constructor(dataDir,issuer){const u=new URL(issuer);if(u.protocol!=='https:'||u.pathname!=='/'||u.search||u.hash||u.username||u.password)throw Error('oauth_https_issuer_required');this.issuer=u.origin;this.resource=this.issuer+'/mcp';this.db=new DatabaseSync(path.join(dataDir,'oauth.sqlite'));this.db.exec(`PRAGMA journal_mode=WAL;
  CREATE TABLE IF NOT EXISTS clients(id TEXT PRIMARY KEY,redirects TEXT NOT NULL,created INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS codes(hash TEXT PRIMARY KEY,client TEXT NOT NULL,redirect TEXT NOT NULL,challenge TEXT NOT NULL,resource TEXT NOT NULL,scope TEXT NOT NULL,expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS access(hash TEXT PRIMARY KEY,client TEXT NOT NULL,resource TEXT NOT NULL,expires INTEGER NOT NULL,family TEXT);
