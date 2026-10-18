@@ -24,7 +24,7 @@ $config=@{
  security=@{adminToken=(New-Token);approvalTimeoutMs=600000;policy=@{browser_navigate='ask';browser_snapshot='allow';desktop_Snapshot='allow';desktop_Screenshot='allow'}}
  egress=@{enabled=$false;mode='disabled'}
  workers=@(
-  @{name='browser';command=(Join-Path $AppDir 'runtime\node.exe');args=@((Join-Path $AppDir 'workers\playwright\cli.mjs'),'--browser','msedge','--user-data-dir',(Join-Path $dataDir 'EdgeProfile'),'--shared-browser-context','--host','127.0.0.1','--port',([string]$browserPort));url="http://localhost:$browserPort/mcp";startupMs=35000},
+  @{name='browser';command=(Join-Path $AppDir 'runtime\node.exe');args=@((Join-Path $AppDir 'workers\playwright\cli.mjs'),'--browser','msedge','--user-data-dir',(Join-Path $dataDir 'EdgeProfile'),'--shared-browser-context','--host','127.0.0.1','--port',([string]$browserPort));url="http://127.0.0.1:$browserPort/mcp";startupMs=35000},
   @{name='desktop';command=(Join-Path $AppDir 'workers\windows-mcp.exe');args=@('serve','--transport','streamable-http','--host','127.0.0.1','--port',([string]$desktopPort),'--tools','Screenshot,Click,Snapshot');url="http://127.0.0.1:$desktopPort/mcp";startupMs=35000}
  )
  tools=@{
