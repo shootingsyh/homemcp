@@ -1,3 +1,4 @@
+import {launchWorker,stopWorker} from './process-lifecycle.mjs';
 import { spawn, execFile } from 'node:child_process';
 import net from 'node:net';
 import fs from 'node:fs';
@@ -77,10 +78,9 @@ export class Worker {
  for(let i=0;i<8&&await isPortOpen(this.spec.url);i++){const previous=this.spec.url,replacement=await freeLocalPort();setPort(this.spec,replacement);await this.onPortChange(this.spec);this.log.write('warn','worker_port_rebound',{worker:this.spec.name,previousPort:new URL(previous).port,newPort:replacement})}
  if(await isPortOpen(this.spec.url))throw new Error('no_free_worker_port');
  const opts={cwd:this.spec.cwd||process.cwd(),env:{...process.env,...(this.spec.env||{})},windowsHide:true,stdio:['ignore','pipe','pipe'],shell:false};
- const useJobRunner=process.platform==='win32'&&!!process.env.HOMEMCP_JOB_RUNNER;
- const command=useJobRunner?process.env.HOMEMCP_JOB_RUNNER:this.spec.command;
- const args=useJobRunner?['--parent',String(process.pid),'--',this.spec.command,...(this.spec.args||[])]:this.spec.args||[];
- const child=spawn(command,args,opts);this.child=child;this.owned=false;
+ // Worker is launched directly. On Windows, its descendants inherit the
+ // Manager-owned Job Object through the Host, while Host retains Worker ownership.
+ const child=launchWorker(this.spec,opts);this.child=child;this.owned=false;
  child.stdout.on('data',d=>this.log.write('debug','worker_stdout',{worker:this.spec.name,bytes:d.length}));
  child.stderr.on('data',d=>this.log.write('warn','worker_stderr',{worker:this.spec.name,bytes:d.length}));
  child.on('error',e=>{this.log.write('error','worker_spawn_error',{worker:this.spec.name,message:e.message});this.status='stopped';this.client=null;this.owned=false});
@@ -110,6 +110,6 @@ export class Worker {
   try{return await c.request('tools/call',{name,arguments:args||{}})}catch(e){if(e.message.includes('upstream_session_lost')){this.client=null;this.owned=false;this.status='stopped';this.log.write('warn','session_lost',{worker:this.spec.name})}throw e}}
  async list(){const c=await this.ensure();const result=await c.request('tools/list',{});this.tools=result.tools||[];return this.tools}
  async stop(){this.client=null;this.owned=false;const child=this.child;if(!child){this.status='stopped';return}this.stopping=true;this.status='stopping';
- if(process.platform==='win32'){await new Promise(resolve=>{const killer=spawn('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});killer.once('error',resolve);killer.once('exit',resolve)})}else{try{child.kill('SIGTERM')}catch{}}
+ await stopWorker(child)
  if(this.child===child)this.child=null;this.stopping=false;this.status='stopped'}
 }
