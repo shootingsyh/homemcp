@@ -72,3 +72,12 @@ test('credential diagnostic and fill helpers are imported by server',()=>{
  assert.match(line,/buildDiagnoseCode/);
  assert.match(line,/classifyBrowserFillError/);
 });
+
+test('only classify genuine worker errors, never echoed browser source',async()=>{
+ const {classifyBrowserFillError,buildFillCode}=await import('../src/credentials.mjs');
+ const code=buildFillCode('https://amazon.com','alice','synthetic','input[name=email]',null);
+ assert.ok(!code.includes('v.passwordSelector)targets.push([pick')===false);
+ assert.equal(classifyBrowserFillError({isError:true,content:[{type:'text',text:'### Error\nTimeout\n### Ran Playwright code\n'+code}]}),'browser_execution_unconfirmed');
+ assert.equal(classifyBrowserFillError({isError:true,content:[{type:'text',text:'### Error\norigin_mismatch\n### Ran Playwright code\n'+code}]}),'origin_mismatch');
+ assert.doesNotThrow(()=>buildFillCode('https://www.amazon.com','alice','synthetic',null,'input[type=password]'));
+});
