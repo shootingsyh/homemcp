@@ -1,9 +1,31 @@
-# Public AWS server. TLS on port 443 is NOT terminated here.
+# HomeMCP tunnel relay (multi-tenant). TLS on port 443 is NOT terminated
+# here: frps routes by SNI and passes the opaque TLS stream to the
+# tenant's frpc. There is no server-side certificate for tenant domains.
 bindAddr = "0.0.0.0"
 bindPort = 7000
 vhostHTTPSPort = 443
+# Deliberately absent:
+#   vhostHTTPPort  — no plaintext HTTP vhost exists on this relay
+#   webServer.*    — no frps dashboard/admin interface, ever
 
+# Shared bootstrap token: frps verifies the frpc privilege key against
+# this before plugins run. It is necessary but NOT sufficient — the
+# tunneld plugin below enforces the per-user credential (metas.token)
+# and per-tenant hostname ownership on top of it.
 auth.method = "token"
 auth.token = "{{ .Envs.FRP_TOKEN }}"
 transport.tls.force = true
-# No HTTP virtual host, dashboard, or admin interface exposed.
+
+# tunneld control-plane plugin (tenant auth + hostname isolation +
+# bandwidth cap). "tunneld" is the compose service name; on a bare host
+# use addr = "http://127.0.0.1:7200".
+#
+# PHASE 1 (owner-only, before tunneld is deployed): comment out this
+# whole [[httpPlugins]] block and run frps alone with the shared token.
+# With the block active and tunneld unreachable, frps fails closed and
+# rejects every login — by design.
+[[httpPlugins]]
+name = "tunneld"
+addr = "http://tunneld:7200"
+path = "/plugin/frp"
+ops = ["Login", "NewProxy"]

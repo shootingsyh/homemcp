@@ -14,3 +14,48 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # The tunneld plugin is queried on every Login/NewProxy. If tunneld
+    # is down, frps fails closed (logins/proxies are rejected), which is
+    # the safe direction for a multi-tenant relay.
+    depends_on:
+      tunneld:
+        condition: service_healthy
+
+  tunneld:
+    build:
+      context: ./tunneld
+      dockerfile: Dockerfile
+    image: homemcp/tunneld:latest
+    restart: unless-stopped
+    # NO published ports on purpose: tunneld is reachable only inside
+    # this compose network (frps -> http://tunneld:7200) plus whatever
+    # operator ingress fronts /api and /webhooks (see README).
+    expose:
+      - "7200"
+    environment:
+      TUNNELD_LISTEN: "0.0.0.0:7200"
+      TUNNELD_STORE_PATH: "/data/tunneld.json"
+      TUNNEL_DOMAIN: "${TUNNEL_DOMAIN:-tunnel.homemcp.si}"
+      API_PUBLIC_BASE: "${API_PUBLIC_BASE:-https://api.homemcp.si}"
+      TUNNELD_ADMIN_KEY: "${TUNNELD_ADMIN_KEY:-}"
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
+      STRIPE_PRICE_ANNUAL: "${STRIPE_PRICE_ANNUAL:-}"
+      STRIPE_PRICE_MONTHLY: "${STRIPE_PRICE_MONTHLY:-}"
+      USER_BANDWIDTH_LIMIT: "${USER_BANDWIDTH_LIMIT:-10MB}"
+    volumes:
+      - tunneld-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      # The distroless image has no shell; the binary self-probes.
+      test: ["CMD", "/tunneld", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  tunneld-data:
