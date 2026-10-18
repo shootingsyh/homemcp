@@ -38,7 +38,7 @@ foreach($f in $files){
 if(!$managerFileId){throw "Manager exe missing from MSI payload"}
 $xml=@"
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="HomeMCP" Manufacturer="HomeMCP" Version="0.1.10" UpgradeCode="E9437E1E-90A8-4D3D-9870-6A591E159CE4" Scope="perUser">
+  <Package Name="HomeMCP" Manufacturer="HomeMCP" Version="0.1.14" UpgradeCode="E9437E1E-90A8-4D3D-9870-6A591E159CE4" Scope="perUser">
     <MajorUpgrade DowngradeErrorMessage="A newer HomeMCP is already installed." />
     <MediaTemplate EmbedCab="yes" />
     <CustomAction Id="LaunchHomeMCP" FileRef="$managerFileId" ExeCommand="" Execute="immediate" Impersonate="yes" Return="asyncNoWait" />

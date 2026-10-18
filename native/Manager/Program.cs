@@ -30,9 +30,12 @@ sealed class TrayContext : ApplicationContext {
  Form? settings;
  Label? statusLabel;
  Label? componentsLabel;
- readonly System.Windows.Forms.Timer monitor=new(){Interval=5000};
+ readonly System.Windows.Forms.Timer monitor=new(){Interval=300000};
  readonly HttpClient http=new(){Timeout=TimeSpan.FromSeconds(2)};
  string LastHealth="Not checked";
+ int hostFailures=0, bridgeFailures=0;
+ bool monitoring=false;
+ DateTimeOffset lastRecovery=DateTimeOffset.MinValue;
  bool SetupDone=>File.Exists(Path.Combine(dir,"setup-complete.marker"));
  TextBox? hostnameBox;
  Label? cloudflareStatus;
@@ -51,10 +54,10 @@ sealed class TrayContext : ApplicationContext {
   tray.ContextMenuStrip=menu;
   tray.DoubleClick+=(_,_)=>OpenSettings();
   _=Task.Run(()=>PipeLoop(cancel.Token));
-  monitor.Tick+=async (_,_)=>await ProbeHealth();
+  monitor.Tick+=async (_,_)=>await MonitorCycle();
   monitor.Start();
   if(SetupDone){Start();}else{OpenSettings();}
-  _=ProbeHealth();
+  _=MonitorCycle();
  }
  bool Running=>host is {HasExited:false};
  string Status=>Running?$"Host process running (PID {host!.Id}); health: {LastHealth}":"Host stopped";
@@ -99,6 +102,55 @@ sealed class TrayContext : ApplicationContext {
   LastHealth=result;
   if(statusLabel is {IsDisposed:false}) RefreshStatus();
   if(componentsLabel is {IsDisposed:false})componentsLabel.Text=ComponentReport();
+ }
+ async Task MonitorCycle(){
+  if(monitoring)return;
+  monitoring=true;
+  try{
+   await ProbeHealth();
+   bool hostHealthy=LastHealth.StartsWith("Healthy",StringComparison.Ordinal);
+   hostFailures=hostHealthy?0:hostFailures+1;
+   bool bridgeHealthy=await CheckBridge(false);
+   bridgeFailures=bridgeHealthy?0:bridgeFailures+1;
+   if(DateTimeOffset.UtcNow-lastRecovery<TimeSpan.FromMinutes(15))return;
+   if(hostFailures>=2 && SetupDone){
+    lastRecovery=DateTimeOffset.UtcNow;
+    LogRecovery("host_restart");
+    Stop();Start();
+    hostFailures=0;
+    return;
+   }
+   if(bridgeFailures>=2){
+    lastRecovery=DateTimeOffset.UtcNow;
+    LogRecovery("bridge_repair");
+    if(await CheckBridge(true))bridgeFailures=0;
+    else LogRecovery("bridge_repair_failed");
+   }
+  }catch(Exception ex){LogRecovery("monitor_error:"+ex.GetType().Name);}
+  finally{monitoring=false;}
+ }
+ void LogRecovery(string message){
+  try{File.AppendAllText(Path.Combine(dir,"manager-recovery.log"),DateTimeOffset.UtcNow.ToString("O")+" "+message+Environment.NewLine);}catch{}
+ }
+ async Task<bool> CheckBridge(bool repair){
+  // The bridge is independent from host egress. Only check installations where
+  // the user has already configured the HomeMCP-specific protected bridge.
+  var bridge=Path.Combine(dir,"start-cloudflare-bridge.ps1");
+  var proxy=Path.Combine(dir,"protected-proxy.mjs");
+  var credential=Path.Combine(dir,"cloudflared","credentials.json");
+  if(!File.Exists(bridge)||!File.Exists(proxy)||!File.Exists(credential))return true;
+  var helper=Path.Combine(app,"scripts","bridge-watch.ps1");
+  if(!File.Exists(helper))return false;
+  var ps=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe");
+  using var process=Process.Start(new ProcessStartInfo(ps){
+   UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,
+   Arguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""+helper+"\""+(repair?" -Repair":"")
+  });
+  if(process==null)return false;
+  using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(30));
+  try{await process.WaitForExitAsync(timeout.Token);}
+  catch(OperationCanceledException){try{process.Kill(entireProcessTree:true);}catch{};LogRecovery("bridge_check_timeout");return false;}
+  return process.ExitCode==0;
  }
  void FinishSetup(){
   if(!RequirementsOK()){
