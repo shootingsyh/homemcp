@@ -38,7 +38,7 @@ test('fill checks live page origin before touching either selector',()=>{
 });
 test('secrets cannot enter standard approval persistence or logger',()=>{
  const server=fs.readFileSync('src/server.mjs','utf8');
- const branch=server.indexOf("if(name==='credential_save'||name==='credential_fill')");
+ const branch=server.indexOf("if(name==='credential_save'||name==='credential_fill'||name==='credential_diagnose')");
  const approval=server.indexOf("if(name==='file_delete')",branch);
  assert.ok(branch>0 && approval>branch);
  assert.ok(!server.slice(branch,approval).includes('security.create('));
@@ -51,4 +51,24 @@ test('public suffix rules group login subdomains without mixing registrable doma
  assert.equal(credentialDomain('https://login.example.co.uk'),'example.co.uk');
  assert.notEqual(credentialDomain('https://login.example.co.uk'),credentialDomain('https://other.co.uk'));
  assert.throws(()=>credentialDomain('https://co.uk'),/unregistrable_domain/);
+});
+
+test('credential failure classifications do not reveal upstream source',async()=>{
+ const {classifyBrowserFillError}=await import('../src/credentials.mjs');
+ assert.equal(classifyBrowserFillError({isError:true,content:[{type:'text',text:'Error: origin_mismatch'}]}),'origin_mismatch');
+ assert.equal(classifyBrowserFillError({isError:true,content:[{type:'text',text:'Error: selector_not_unique'}]}),'selector_not_unique');
+ assert.equal(classifyBrowserFillError({isError:false,content:[{type:'text',text:'### Result\n"HOMEMCP_CREDENTIAL_FILLED"'}]}),null);
+ assert.equal(classifyBrowserFillError({isError:true,content:[{type:'text',text:'secret never echoed xyz'}]}),'browser_execution_unconfirmed');
+});
+
+test('success must be in evaluated result, not echoed browser code',async()=>{
+ const {classifyBrowserFillError}=await import('../src/credentials.mjs');
+ assert.equal(classifyBrowserFillError({isError:false,content:[{type:'text',text:'### Result\nundefined\n\n### Ran Playwright code\nreturn \"HOMEMCP_CREDENTIAL_FILLED\";'}]}),'browser_execution_unconfirmed');
+});
+
+test('credential diagnostic and fill helpers are imported by server',()=>{
+ const s=fs.readFileSync('src/server.mjs','utf8');
+ const line=s.split('\n').find(x=>x.startsWith('import {CredentialVault'));
+ assert.match(line,/buildDiagnoseCode/);
+ assert.match(line,/classifyBrowserFillError/);
 });
