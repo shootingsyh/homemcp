@@ -37,8 +37,8 @@ type Server struct {
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
-		// Used by the docker-compose healthcheck: the distroless image
-		// has no shell/curl, so the binary probes its own /healthz.
+		// Used by the installer / operator as a liveness probe: the
+		// binary probes its own /healthz.
 		os.Exit(runHealthcheck(LoadConfig()))
 	}
 
@@ -80,7 +80,7 @@ func main() {
 // routes builds the HTTP routing table (shared by main and tests).
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	// frps server plugin (compose-network only; never publish this port).
+	// frps server plugin (loopback only; never publish this port).
 	mux.HandleFunc("POST /plugin/frp", s.handleFRPPlugin)
 	// Public client API (no web pages anywhere).
 	mux.HandleFunc("POST /api/v1/enrollments", s.handleCreateEnrollment)
@@ -97,7 +97,7 @@ func (s *Server) routes() *http.ServeMux {
 		mux.HandleFunc("POST /mock-pay/{id}", s.handleMockPaySubmit)
 		mux.HandleFunc("POST /api/v1/mock/users/{username}/subscription-event", s.handleMockSubscriptionEvent)
 	}
-	// Liveness for compose/orchestrators.
+	// Liveness probe for the operator / systemd.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})

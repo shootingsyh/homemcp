@@ -43,7 +43,7 @@ though it routes it:
 
 | Piece | Role |
 |---|---|
-| `frps` (fatedier/frps:v0.68.0) | Data plane: SNI passthrough on 443, frpc control on 7000 (`transport.tls.force = true`), bootstrap token auth. |
+| `frps` (fatedier/frp release binary, v0.68.0) | Data plane: SNI passthrough on 443, frpc control on 7000 (`transport.tls.force = true`), bootstrap token auth. Runs as the `homemcp-frps` systemd unit — bare metal, no containers. |
 | `tunneld/` (Go, stdlib only) | Control plane: frp plugin (tenant auth, hostname isolation, bandwidth cap), registration/account API, Stripe webhooks, JSON user store. |
 | Stripe | Hosted Checkout + Billing Portal + subscription webhooks. Card data stays with Stripe. |
 | DNS | `tunnel.homemcp.si` and `*.tunnel.homemcp.si` as **DNS-only (grey cloud)** A records to the host — Cloudflare proxying cannot carry this raw TLS passthrough. |
@@ -68,12 +68,12 @@ though it routes it:
 
 ### tunneld storage
 
-One JSON file (`tunneld.json` on a named volume), rewritten atomically
+One JSON file (`/var/lib/tunneld/tunneld.json`), rewritten atomically
 on each mutation (temp file + fsync + rename), guarded by one mutex.
 Chosen for this scale: one relay, hundreds of users, rare writes, zero
 extra services to operate. Limits: single tunneld instance, O(n) writes.
 If it ever outgrows that, swap `store.go` for SQLite behind the same
-method set. Back up the volume like any other state file; it contains
+method set. Back up the file like any other state file; it contains
 token *hashes* and Stripe IDs, never plaintext tokens or card data.
 
 ## Pricing rules (encoded in tunneld + Stripe config)
@@ -120,27 +120,26 @@ and tested before a real Stripe account exists:
 
 ## Standalone mock instance (for client development)
 
-`docker-compose.mock.yml` + `.env.mock.example` package the mock
-mode above as a ready-to-run, single-container instance the client
-developer can point the HomeMCP client at while building the
-registration flow — no Oracle host, no Stripe account, no real
-payment. It runs **tunneld only**: frps is deliberately absent,
-because the enrollment → pay → claim → account flow never touches
-the tunnel data plane. (The frpc config handed out at claim time
-still names the production frps address; the dev flow validates
-everything up to claim + account state, it just does not open a
-real tunnel.)
+`deploy/run-mock.sh` + `.env.mock.example` package the mock mode
+above as a ready-to-run instance the client developer can point the
+HomeMCP client at while building the registration flow — no Oracle
+host, no Stripe account, no real payment. It runs **tunneld only**:
+frps is deliberately absent, because the enrollment → pay → claim →
+account flow never touches the tunnel data plane. (The frpc config
+handed out at claim time still names the production frps address; the
+dev flow validates everything up to claim + account state, it just
+does not open a real tunnel.)
 
-Start it on any Docker host:
+Start it on any Linux host with Go available (it builds tunneld on
+first run, or set `TUNNELD_BIN` to a prebuilt binary):
 
 ```bash
 cp .env.mock.example .env.mock
 # Edit .env.mock: set API_PUBLIC_BASE to the address the client dev
 # machine will reach this host at (LAN IP or DNS name, port must
 # match MOCK_PORT), and set TUNNELD_ADMIN_KEY
-# (openssl rand -hex 32 — compose refuses to start without it).
-docker compose -f docker-compose.mock.yml --env-file .env.mock up -d --build
-docker compose -f docker-compose.mock.yml --env-file .env.mock ps   # tunneld healthy
+# (openssl rand -hex 32 — run-mock.sh refuses to start without it).
+./deploy/run-mock.sh        # foreground; Ctrl-C to stop
 ```
 
 What the client dev gets:
@@ -200,51 +199,60 @@ curl -s -X POST "$BASE/api/v1/mock/users/devtester/subscription-event" \
   -d '{"event":"invoice.payment_failed"}'   # -> past_due + 3-day grace
 ```
 
-Stop it with `docker compose -f docker-compose.mock.yml
---env-file .env.mock down` (add `-v` to also wipe the mock user
-store and start clean).
+Stop it with Ctrl-C (it runs in the foreground). The mock user store
+is `./tunneld-mock.json` next to this folder — delete it to start
+clean.
 
 > **⚠ Same warning as above, at the deployment level:** this profile
 > exists so a client developer can self-serve test accounts — which
 > is precisely why it must never be reachable as the production API.
-> This same profile is what will be deployed **for dev** on the
+> This same script is what will be deployed **for dev** on the
 > Oracle host once it exists (client testing against a realistic
-> host), as a separate deployment next to — never instead of — the
-> production relay from `docker-compose.yml`.
+> host), as a separate instance next to — never instead of — the
+> production relay installed by `deploy/install.sh`.
 
 ## Phase 1 (owner-only) can run frps alone
 
 Before tunneld/Stripe are live, the relay works as a single-tenant
-passthrough exactly like the original MVP: comment out the
-`[[httpPlugins]]` block in `frps.toml`, run only the frps service, and
-use one privately held frpc config with the shared token. Do **not**
-hand that token to anyone else in this mode — without the plugin there
-is no per-tenant hostname enforcement. Turn the plugin on (and keep it
-on) before the first outside subscriber connects.
+passthrough exactly like the original MVP: run
+`PHASE1=1 ./deploy/install.sh`, which installs frps **without** the
+`[[httpPlugins]]` block (equivalently: comment the block out of
+`frps.toml` by hand), and use one privately held frpc config with the
+shared token. Do **not** hand that token to anyone else in this mode
+— without the plugin there is no per-tenant hostname enforcement.
+Turn the plugin on (and keep it on) before the first outside
+subscriber connects.
 
 ## Deploy outline (Oracle host)
 
+**Bare metal only — no Docker.** frps is a single static binary and
+tunneld is a single Go binary; each runs under its own systemd unit
+(`deploy/install.sh` sets everything up):
+
 1. Provision the A1.Flex host (1 OCPU / 6 GB, Ubuntu 24.04) with a
-   reserved public IPv4. Firewall: allow **TCP 443** and **TCP 7000**
-   from anywhere; SSH (22) restricted to the operator. Nothing else is
-   published — tunneld's 7200 is never exposed (compose keeps it on the
-   internal network, no `ports:`).
-2. Install Docker Engine + Compose plugin. Copy this `server/` folder
-   to the host.
-3. `cp .env.example .env && chmod 600 .env`; fill `FRP_TOKEN`
-   (`openssl rand -hex 32`) and, for multi-tenant, `TUNNELD_ADMIN_KEY`
-   and the Stripe values. `docker compose config`, `docker compose up -d`,
-   `docker compose ps` (tunneld must be healthy before frps serves
-   logins, per the compose `depends_on`).
-4. DNS (DNS-only / grey cloud): A records for `tunnel.homemcp.si` and
-   `*.tunnel.homemcp.si` to the host IP.
-5. API ingress: point `api.homemcp.si` at an operator reverse proxy on
-   the host (e.g. Caddy) that forwards only `/api/*` and `/webhooks/*`
-   to tunneld on the compose network (or map `127.0.0.1:7200` on the
-   host for it). This proxy terminates TLS **only for the operator's
-   own API hostname** — never for `*.tunnel.homemcp.si`, which stays
-   frps passthrough. tunneld deliberately ships without published
-   ports; how ingress reaches it is an operator choice at deploy time.
+   reserved public IPv4. Firewall (VCN security list + host iptables,
+   the latter handled by the installer): allow **TCP 443** and
+   **TCP 7000** from anywhere; SSH (22) restricted to the operator.
+   Nothing else is published — tunneld listens on loopback
+   (127.0.0.1:7200) only.
+2. Get this `server/` folder onto the host (clone the repo there, or
+   copy the folder). `cp .env.example .env && chmod 600 .env`; fill
+   `FRP_TOKEN` (`openssl rand -hex 32`), `TUNNELD_ADMIN_KEY`, and the
+   Stripe values.
+3. `sudo ./deploy/install.sh` — installs the frps release binary and
+   builds tunneld (it fetches a Go toolchain if `go` is missing, or
+   pass `TUNNELD_BIN=/path/to/tunneld`), writes `/etc/frp/frps.toml`,
+   `/etc/frp/frps.env`, `/etc/tunneld/env`, and the two systemd
+   units, then enables and starts them. Verify:
+   `systemctl status homemcp-tunneld homemcp-frps` and
+   `tunneld healthcheck`.
+4. DNS (DNS-only): A records for `tunnel.homemcp.si`,
+   `*.tunnel.homemcp.si`, and `api.homemcp.si` to the host IP.
+5. API ingress: point `api.homemcp.si` at an operator reverse proxy
+   on the host (e.g. Caddy) that forwards only `/api/*` and
+   `/webhooks/*` to tunneld on `127.0.0.1:7200`. This proxy
+   terminates TLS **only for the operator's own API hostname** —
+   never for `*.tunnel.homemcp.si`, which stays frps passthrough.
 6. Stripe dashboard: create the two prices ($9.99/year, $0.99/month),
    put their IDs + the secret key in `.env`, and register the webhook
    endpoint `https://api.homemcp.si/webhooks/stripe` for
@@ -273,15 +281,20 @@ on) before the first outside subscriber connects.
   abandoned checkouts therefore need occasional operator cleanup.
 - A private tunnel does not replace application authentication: keep
   HomeMCP's own auth enabled on every endpoint.
-- Docker images are pinned by version tag, not digest; review upstream
-  security fixes and update deliberately. DNS registration, Stripe
-  account activation, and host provisioning are operator steps, not
-  performed by anything in this folder.
+- Release binaries are pinned by version (`FRP_VERSION` in
+  `deploy/install.sh`), not by hash; review upstream security fixes
+  and update deliberately. DNS registration, Stripe account
+  activation, and host provisioning are operator steps, not performed
+  by anything in this folder.
+- (History: the server originally shipped as Docker Compose files;
+  those were removed when the deployment went bare-metal. They remain
+  in git history on this branch if ever needed.)
 
 ## Verification checklist
 
-- `docker compose config` renders; `docker compose ps` shows frps up
-  and tunneld healthy.
+- `systemctl is-active homemcp-frps homemcp-tunneld` → active;
+  `tunneld healthcheck` passes; `ss -lntp` shows frps on 7000/443 and
+  tunneld only on 127.0.0.1:7200.
 - Owner frpc connects (plugin on) and `curl https://<user>.tunnel.homemcp.si/mcp`
   reaches HomeMCP with a valid, trusted certificate — no `curl -k`.
 - Wrong per-user token → Login rejected; valid token + another user's
@@ -293,5 +306,4 @@ on) before the first outside subscriber connects.
 - Kill the subscription in Stripe test mode → after the next
   login/proxy registration, the tunnel refuses to connect.
 - Nothing but 443/7000 is reachable from the internet
-  (`nmap` the host); tunneld's 7200 answers only inside the compose
-  network.
+  (`nmap` the host); tunneld's 7200 answers only on loopback.

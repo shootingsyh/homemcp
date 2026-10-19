@@ -23,9 +23,11 @@ const GracePeriod = 3 * 24 * time.Hour
 // alone does not yield a working frpc credential set, and vice versa.
 type Config struct {
 	// ListenAddr is where tunneld serves the plugin endpoint, the public
-	// API and the Stripe webhook. Default binds localhost only; in the
-	// docker-compose deployment it is 0.0.0.0:7200 *inside* the compose
-	// network with no published ports (see docker-compose.yml).
+	// API and the Stripe webhook. Default binds localhost only: frps
+	// reaches the plugin over loopback, and the public API/webhook are
+	// fronted by the operator's reverse proxy on the API hostname.
+	// The standalone mock profile (deploy/run-mock.sh) overrides it to
+	// 0.0.0.0:<MOCK_PORT> on purpose, for LAN client development.
 	ListenAddr string
 	// StorePath is the JSON user store file (see store.go).
 	StorePath string

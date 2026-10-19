@@ -17,15 +17,16 @@ auth.token = "{{ .Envs.FRP_TOKEN }}"
 transport.tls.force = true
 
 # tunneld control-plane plugin (tenant auth + hostname isolation +
-# bandwidth cap). "tunneld" is the compose service name; on a bare host
-# use addr = "http://127.0.0.1:7200".
+# bandwidth cap). Bare-metal installs listen on loopback; if tunneld
+# runs elsewhere, point addr at it.
 #
 # PHASE 1 (owner-only, before tunneld is deployed): comment out this
-# whole [[httpPlugins]] block and run frps alone with the shared token.
+# whole [[httpPlugins]] block and run frps alone with the shared token
+# (deploy/install.sh does this with PHASE1=1).
 # With the block active and tunneld unreachable, frps fails closed and
 # rejects every login — by design.
 [[httpPlugins]]
 name = "tunneld"
-addr = "http://tunneld:7200"
+addr = "http://127.0.0.1:7200"
 path = "/plugin/frp"
 ops = ["Login", "NewProxy"]
