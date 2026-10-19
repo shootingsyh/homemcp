@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -38,6 +39,32 @@ import (
 // decision; never log metas (it carries the per-user token).
 
 const frpPluginAPIVersion = "0.1.0"
+
+// apiIngressUsername is the operator's own frpc account, used to route
+// the public API hostname (api.homemcp.si) through the same frps: a
+// frpc running on the relay host itself registers an https proxy for
+// exactly the API host, backed by the local TLS-terminating reverse
+// proxy in front of tunneld. That is how the API gets a public 443
+// without a second listener colliding with frps' SNI passthrough.
+//
+// The account is created by the operator directly in the store (the
+// name is in reservedUsernames, so it can never be registered through
+// the API), holds a normal per-user token checked like everyone
+// else's, and is confined by pluginNewProxyIngress to that ONE
+// hostname: it cannot claim any tenant subdomain, and no tenant can
+// claim the API hostname (their rule pins them to their own name).
+const apiIngressUsername = "api-ingress"
+
+// apiHost returns the public API hostname derived from
+// APIPublicBase (https://api.homemcp.si -> api.homemcp.si), or ""
+// when unparsable (the ingress account then matches nothing).
+func (s *Server) apiHost() string {
+	u, err := url.Parse(s.cfg.APIPublicBase)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
 
 type pluginRequest struct {
 	Version string          `json:"version"`
@@ -223,6 +250,9 @@ func (s *Server) pluginNewProxy(content json.RawMessage) pluginResponse {
 		log.Printf("plugin NewProxy reject user=%q proxy=%q reason=%q", c.User.User, c.ProxyName, rej.RejectReason)
 		return *rej
 	}
+	if u.Username == apiIngressUsername {
+		return s.pluginNewProxyIngress(c)
+	}
 	if c.ProxyType != "https" {
 		return pluginReject("tunneld: only https proxies are allowed (got " + c.ProxyType + ")")
 	}
@@ -257,4 +287,27 @@ func (s *Server) pluginNewProxy(content json.RawMessage) pluginResponse {
 	}
 	log.Printf("plugin NewProxy accept user=%q proxy=%q domain=%s bandwidth=%s(server)", u.Username, c.ProxyName, wantDomain, s.cfg.BandwidthLimit)
 	return pluginResponse{Reject: false, Unchange: false, Content: modified}
+}
+
+// pluginNewProxyIngress polices the operator's API-ingress account:
+// https only, no subdomain/remote_port tricks, and custom_domains must
+// be exactly the API hostname — nothing else, not even a tenant name
+// the operator might fat-finger. Accepted unchanged: operator traffic
+// to the API is not bandwidth-metered (and its frpc is on this host).
+func (s *Server) pluginNewProxyIngress(c newProxyContent) pluginResponse {
+	if c.ProxyType != "https" {
+		return pluginReject("tunneld: api ingress allows https proxies only")
+	}
+	if c.SubDomain != "" {
+		return pluginReject("tunneld: api ingress: subdomain field is not allowed")
+	}
+	if c.RemotePort != 0 {
+		return pluginReject("tunneld: api ingress: remote_port is not allowed")
+	}
+	host := s.apiHost()
+	if host == "" || len(c.CustomDomains) != 1 || !strings.EqualFold(strings.TrimSpace(c.CustomDomains[0]), host) {
+		return pluginReject("tunneld: api ingress may only claim the API hostname")
+	}
+	log.Printf("plugin NewProxy accept api-ingress proxy=%q domain=%s", c.ProxyName, host)
+	return pluginAcceptUnchanged()
 }

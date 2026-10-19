@@ -63,6 +63,7 @@ var reservedUsernames = map[string]bool{
 	"auth": true, "oauth": true, "webhook": true, "webhooks": true,
 	"abuse": true, "security": true, "legal": true, "privacy": true,
 	"terms": true, "about": true, "contact": true, "info": true,
+	"api-ingress": true, // the operator's frps ingress account (plugin.go)
 }
 
 // validateUsername normalizes (trim + lowercase; DNS is case-insensitive)

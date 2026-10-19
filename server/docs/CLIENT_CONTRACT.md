@@ -290,6 +290,15 @@ Lists users with plan/status/Stripe IDs and the `mock` flag. Never
 returns token hashes. `503 admin_disabled` when no key is configured
 server-side; `401 unauthorized` on a wrong key.
 
+API ingress account: the public API hostname (`api.homemcp.si`) is
+itself routed through frps by an operator-owned frpc account named
+`api-ingress` (a reserved username, creatable only by the operator
+directly in the store). The plugin confines that account to claiming
+exactly the API hostname and confines every tenant to their own
+subdomain, so the API host can never be squatted. Clients never
+interact with this account; it is documented here only so the
+hostname's routing is not a mystery.
+
 Mock allowlist (see [Mock Pay](#mock-pay-internal-testing)):
 
 ```
