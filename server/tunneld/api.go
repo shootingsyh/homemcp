@@ -21,7 +21,10 @@ import (
 //   bad_request, invalid_username, username_reserved, username_taken,
 //   invalid_plan, enrollment_not_found, credentials_not_ready,
 //   unauthorized, no_billing_account, stripe_not_configured,
-//   admin_disabled, user_not_found, invalid_event, internal.
+//   admin_disabled, user_not_found, invalid_event,
+//   cert_dns_not_configured, subscription_inactive, invalid_txt_value,
+//   challenge_not_found, challenge_limit, challenge_rate_limited,
+//   dns_provider_error, internal.
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

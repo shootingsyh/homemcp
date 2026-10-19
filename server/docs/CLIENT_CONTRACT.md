@@ -162,6 +162,71 @@ server learns about them via webhooks (state may lag a few seconds).
 Errors: `401 unauthorized`, `409 no_billing_account`,
 `503 stripe_not_configured`, `502 stripe_error`.
 
+### 6. Certificates via DNS-01 (per-user certificates)
+
+Every user's endpoint `<username>.tunnel.homemcp.si` has its **own**
+certificate. The client generates the key pair locally; **the private
+key never leaves the user's machine and is never sent to the server —
+there is no upload API, by design.** To prove domain control to the
+ACME CA, the client must publish a DNS-01 TXT record at
+`_acme-challenge.<username>.tunnel.homemcp.si`. Writing DNS is the
+server's job (the DNS provider credential stays server-side), via
+exactly these endpoints:
+
+```
+POST /api/v1/certificates/dns-challenges
+Authorization: Bearer <per-user token>
+{ "value": "<base64url SHA-256 digest of the key authorization>" }
+```
+
+The `value` is the 43-character digest your ACME library computes
+from the key authorization; the server treats it as opaque and
+publishes it verbatim. The record name is derived from your
+authenticated username — the API has no field to name a record, so a
+challenge can only ever be created for your own subdomain.
+
+`201` → `{ id, name, value, status, created_at, expires_at }` with
+`status: "pending"`.
+
+```
+GET    /api/v1/certificates/dns-challenges/{id}   (Bearer)
+DELETE /api/v1/certificates/dns-challenges/{id}   (Bearer)
+```
+
+- `GET` → the same view. Status moves `pending` → `propagated` once
+  the TXT is publicly resolvable (the server checks live DNS). Poll
+  every ~10 s; propagation on this zone is typically under a minute.
+  Only ask the CA to validate after `propagated`.
+- `DELETE` → removes the TXT and returns the view with
+  `status: "cleaned"`. Idempotent — call it as soon as validation
+  finishes, success or failure, so challenge records never linger.
+- Challenges live at most **2 hours**: past `expires_at` the server
+  removes the TXT and reports `status: "expired"`. If your flow
+  stalls past expiry, start over with a fresh challenge.
+- Another user's challenge ID returns the same
+  `404 challenge_not_found` as a nonexistent one.
+
+Errors: `401 unauthorized`, `403 subscription_inactive` (issuance
+requires `trialing`/`active`, or `past_due` inside its grace window),
+`422 invalid_txt_value`, `429 challenge_limit` (more than 4 active
+challenges), `429 challenge_rate_limited` (more than 10 created in
+an hour), `502 dns_provider_error` (retry with backoff),
+`503 cert_dns_not_configured` (operator has not enabled this yet).
+
+Client requirements:
+
+- Full flow: ACME order → get the DNS-01 digest → `POST` here →
+  poll until `propagated` → tell the CA to validate → `DELETE` →
+  install the issued certificate on the local endpoint.
+- Certificates are per-user and issued by the CA directly to the
+  client; the server never sees the certificate's private key and
+  cannot re-issue or recover it. Losing the key is a purely local
+  event: generate a new one and re-issue.
+- Renewals repeat the identical flow with a fresh challenge
+  (Let's Encrypt certificates last 90 days; renew with ~30 days
+  remaining). Budget one challenge per issuance — the rate limits
+  above are sized for that with ample headroom.
+
 ## Mock Pay (internal testing)
 
 Mock payment is a **server-side** decision in two forms; the client
@@ -243,7 +308,10 @@ Stable codes: `bad_request`, `invalid_username`, `username_reserved`,
 `username_taken`, `invalid_plan`, `enrollment_not_found`,
 `unauthorized`, `no_billing_account`, `stripe_not_configured`,
 `stripe_error`, `admin_disabled`, `invalid_signature` (webhooks),
-`user_not_found`, `invalid_event` (mock-pay test hook), `internal`.
+`user_not_found`, `invalid_event` (mock-pay test hook),
+`cert_dns_not_configured`, `subscription_inactive`, `invalid_txt_value`,
+`challenge_not_found`, `challenge_limit`, `challenge_rate_limited`,
+`dns_provider_error`, `internal`.
 
 ## Security notes for client implementers
 
@@ -255,3 +323,7 @@ Stable codes: `bad_request`, `invalid_username`, `username_reserved`,
   client must surface — never silently accept — certificate errors.
 - The HomeMCP MCP-layer Bearer Token is unrelated to everything in
   this document and must not be sent to tunneld or frps.
+- Your TLS private key is generated on your machine and must never be
+  transmitted anywhere — the DNS-01 endpoints in step 6 exist
+  precisely so it never has to be. Treat any request to "upload your
+  key or certificate private part" as a red flag, not a feature.

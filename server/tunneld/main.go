@@ -33,6 +33,12 @@ type Server struct {
 	cfg    Config
 	store  *Store
 	stripe *stripeClient
+	// cf is the Cloudflare DNS client (certs.go); built lazily by
+	// cfClient() so tests can inject a fake-backed one.
+	cf *cloudflareClient
+	// txtLookup overrides the DNS TXT resolver used for challenge
+	// propagation checks (tests); nil means the production resolver.
+	txtLookup func(ctx context.Context, name string) ([]string, error)
 }
 
 func main() {
@@ -66,9 +72,12 @@ func main() {
 		defer cancel()
 		_ = httpSrv.Shutdown(shutdownCtx)
 	}()
+	if cfg.CertDNSConfigured() {
+		go srv.sweepExpiredChallenges(ctx)
+	}
 
-	log.Printf("tunneld listening on %s (tunnel domain %s, stripe configured: %v, bandwidth cap: %q)",
-		cfg.ListenAddr, cfg.TunnelDomain, cfg.StripeConfigured(), cfg.BandwidthLimit)
+	log.Printf("tunneld listening on %s (tunnel domain %s, stripe configured: %v, cert dns configured: %v, bandwidth cap: %q)",
+		cfg.ListenAddr, cfg.TunnelDomain, cfg.StripeConfigured(), cfg.CertDNSConfigured(), cfg.BandwidthLimit)
 	if cfg.MockPay {
 		log.Printf("WARNING: MOCK PAY ENABLED — NOT FOR PRODUCTION: enrollments can be self-activated for free via /mock-pay/<id>; use on internal/dev deployments only")
 	}
@@ -94,6 +103,13 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/enrollments/{id}", s.handleGetEnrollment)
 	mux.HandleFunc("GET /api/v1/account", s.handleGetAccount)
 	mux.HandleFunc("POST /api/v1/account/portal", s.handlePortal)
+	// ACME DNS-01 challenges for per-user certificates (certs.go):
+	// the client publishes its challenge TXT through tunneld because
+	// the Cloudflare token stays server-side. Always routed; the
+	// handlers 503 when certificate DNS is not configured.
+	mux.HandleFunc("POST /api/v1/certificates/dns-challenges", s.handleCreateChallenge)
+	mux.HandleFunc("GET /api/v1/certificates/dns-challenges/{id}", s.handleGetChallenge)
+	mux.HandleFunc("DELETE /api/v1/certificates/dns-challenges/{id}", s.handleDeleteChallenge)
 	mux.HandleFunc("GET /api/v1/admin/users", s.handleAdminUsers)
 	// Stripe webhooks.
 	mux.HandleFunc("POST /webhooks/stripe", s.handleStripeWebhook)

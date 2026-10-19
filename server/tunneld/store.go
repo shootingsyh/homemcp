@@ -82,10 +82,29 @@ type Enrollment struct {
 	UpdatedAt               time.Time `json:"updated_at"`
 }
 
+// DNSChallenge is one ACME DNS-01 challenge tunneld is maintaining
+// for a user (certs.go). The Value is the ACME key-authorization
+// digest the client asked tunneld to publish — a hash of public
+// material, not a secret; it is stored so tunneld can verify
+// propagation and clean the record up. The TLS private key itself
+// NEVER leaves the client: publishing this TXT is the one thing the
+// client cannot do itself, and it is all tunneld ever does for certs.
+type DNSChallenge struct {
+	ID           string    `json:"id"`
+	Username     string    `json:"username"`
+	Value        string    `json:"value"`
+	CFRecordID   string    `json:"cf_record_id,omitempty"`
+	Status       string    `json:"status"` // active | cleaned | expired
+	CreatedAt    time.Time `json:"created_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	PropagatedAt time.Time `json:"propagated_at,omitempty"`
+}
+
 type storeData struct {
 	Users       map[string]*User          `json:"users"`
 	Enrollments map[string]*Enrollment    `json:"enrollments"`
 	MockUsers   map[string]*MockUserEntry `json:"mock_users,omitempty"`
+	Challenges  map[string]*DNSChallenge  `json:"challenges,omitempty"`
 }
 
 // Store is the tunneld persistence layer.
@@ -112,6 +131,7 @@ func OpenStore(path string) (*Store, error) {
 	s.data.Users = map[string]*User{}
 	s.data.Enrollments = map[string]*Enrollment{}
 	s.data.MockUsers = map[string]*MockUserEntry{}
+	s.data.Challenges = map[string]*DNSChallenge{}
 	raw, err := os.ReadFile(path)
 	switch {
 	case err == nil:
@@ -127,6 +147,9 @@ func OpenStore(path string) (*Store, error) {
 			}
 			if s.data.MockUsers == nil {
 				s.data.MockUsers = map[string]*MockUserEntry{}
+			}
+			if s.data.Challenges == nil {
+				s.data.Challenges = map[string]*DNSChallenge{}
 			}
 		}
 	case errors.Is(err, os.ErrNotExist):
@@ -379,10 +402,89 @@ func (s *Store) FindUserBySubscription(subscriptionID string) (User, bool) {
 }
 
 var (
-	ErrUsernameTaken  = errors.New("username taken")
-	ErrNotFound       = errors.New("not found")
-	ErrAlreadyClaimed = errors.New("credentials already issued")
+	ErrUsernameTaken    = errors.New("username taken")
+	ErrNotFound         = errors.New("not found")
+	ErrAlreadyClaimed   = errors.New("credentials already issued")
+	ErrChallengeLimit   = errors.New("too many active challenges")
+	ErrChallengeRateCap = errors.New("challenge creation rate exceeded")
 )
+
+// CreateChallenge records a new DNS-01 challenge, enforcing the
+// per-user abuse caps atomically under the write lock: at most
+// maxActive simultaneously active challenges, and at most maxPerWindow
+// created within the trailing window (counted from CreatedAt, so the
+// cap survives restarts).
+func (s *Store) CreateChallenge(ch DNSChallenge, maxActive, maxPerWindow int, windowStart time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	active, recent := 0, 0
+	for _, existing := range s.data.Challenges {
+		if existing.Username != ch.Username {
+			continue
+		}
+		if existing.Status == "active" {
+			active++
+		}
+		if existing.CreatedAt.After(windowStart) {
+			recent++
+		}
+	}
+	if active >= maxActive {
+		return ErrChallengeLimit
+	}
+	if recent >= maxPerWindow {
+		return ErrChallengeRateCap
+	}
+	cp := ch
+	s.data.Challenges[ch.ID] = &cp
+	return s.saveLocked()
+}
+
+// GetChallenge returns a copy of a challenge.
+func (s *Store) GetChallenge(id string) (DNSChallenge, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ch, ok := s.data.Challenges[id]
+	if !ok {
+		return DNSChallenge{}, false
+	}
+	return *ch, true
+}
+
+// UpdateChallenge mutates a challenge under the write lock and persists.
+func (s *Store) UpdateChallenge(id string, fn func(*DNSChallenge)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ch, ok := s.data.Challenges[id]
+	if !ok {
+		return ErrNotFound
+	}
+	fn(ch)
+	return s.saveLocked()
+}
+
+// ListActiveChallenges returns copies of all still-active challenges
+// (the expiry sweeper's work list).
+func (s *Store) ListActiveChallenges() []DNSChallenge {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]DNSChallenge, 0)
+	for _, ch := range s.data.Challenges {
+		if ch.Status == "active" {
+			out = append(out, *ch)
+		}
+	}
+	return out
+}
+
+// newChallengeID mints an unguessable challenge ID.
+func newChallengeID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "dns_" + hex.EncodeToString(b), nil
+}
 
 // ClaimAndIssue atomically marks a ready enrollment claimed and installs
 // the hash of the freshly generated token on the user. It is the only

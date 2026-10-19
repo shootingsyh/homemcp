@@ -73,6 +73,18 @@ type Config struct {
 	// Enforced server-side (bandwidth_limit_mode=server). Empty string
 	// disables the rewrite (not recommended for multi-tenant use).
 	BandwidthLimit string
+
+	// Cloudflare DNS for ACME DNS-01 challenges (certs.go). tunneld —
+	// and only tunneld — holds a zone-scoped API token and publishes
+	// the _acme-challenge TXT record for a user's own subdomain; the
+	// token is never sent to clients and never persisted in the store.
+	// Both fields empty disables the certificate endpoints
+	// (503 cert_dns_not_configured).
+	CloudflareAPIToken string
+	CloudflareZoneID   string
+	// CloudflareAPIBase is overridable for tests; production is
+	// https://api.cloudflare.com/client/v4.
+	CloudflareAPIBase string
 }
 
 // LoadConfig reads configuration from the process environment.
@@ -95,6 +107,9 @@ func LoadConfigFrom(getenv func(string) string) Config {
 		StripePriceMonthly:  getenv("STRIPE_PRICE_MONTHLY"),
 		StripeAPIBase:       strings.TrimRight(envOr(getenv, "STRIPE_API_BASE", "https://api.stripe.com"), "/"),
 		BandwidthLimit:      envOr(getenv, "USER_BANDWIDTH_LIMIT", "10MB"),
+		CloudflareAPIToken:  getenv("CLOUDFLARE_API_TOKEN"),
+		CloudflareZoneID:    getenv("CLOUDFLARE_ZONE_ID"),
+		CloudflareAPIBase:   strings.TrimRight(envOr(getenv, "CLOUDFLARE_API_BASE", "https://api.cloudflare.com/client/v4"), "/"),
 	}
 	cfg.FRPSAddr = envOr(getenv, "FRPS_ADDR", cfg.TunnelDomain)
 	cfg.FRPSPort = 7000
@@ -126,6 +141,12 @@ func parseBoolEnv(v string) bool {
 // StripeConfigured reports whether checkout can be created at all.
 func (c Config) StripeConfigured() bool {
 	return c.StripeSecretKey != "" && c.StripePriceAnnual != "" && c.StripePriceMonthly != ""
+}
+
+// CertDNSConfigured reports whether the DNS-01 challenge endpoints
+// can serve: tunneld needs a Cloudflare API token + zone ID.
+func (c Config) CertDNSConfigured() bool {
+	return c.CloudflareAPIToken != "" && c.CloudflareZoneID != ""
 }
 
 // PriceFor returns the configured Stripe price ID for a plan.
