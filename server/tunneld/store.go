@@ -517,6 +517,58 @@ func (s *Store) ClaimAndIssue(enrollmentID, tokenHash string) (Enrollment, User,
 	return *e, *u, nil
 }
 
+// RotateUserToken replaces a user's token hash with a fresh one
+// (credential recovery, and re-issue for reusable test accounts). The
+// previous token stops working immediately: the frp plugin compares
+// against this hash on every Login and NewProxy.
+func (s *Store) RotateUserToken(username, tokenHash string) (User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.data.Users[username]
+	if !ok {
+		return User{}, ErrNotFound
+	}
+	u.TokenHash = tokenHash
+	if err := s.saveLocked(); err != nil {
+		return User{}, err
+	}
+	return *u, nil
+}
+
+// DeleteUser removes a user and everything attached to it — its
+// enrollments and DNS challenges — and returns the challenges that
+// were still active, so the caller can remove their TXT records at
+// the DNS provider. It backs test-account cleanup (the API layer
+// restricts it to mock accounts): after deletion the username can be
+// enrolled again from a clean slate.
+func (s *Store) DeleteUser(username string) (User, []DNSChallenge, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.data.Users[username]
+	if !ok {
+		return User{}, nil, ErrNotFound
+	}
+	var active []DNSChallenge
+	for id, ch := range s.data.Challenges {
+		if ch.Username == username {
+			if ch.Status == ChallengeActive {
+				active = append(active, *ch)
+			}
+			delete(s.data.Challenges, id)
+		}
+	}
+	for id, e := range s.data.Enrollments {
+		if e.Username == username {
+			delete(s.data.Enrollments, id)
+		}
+	}
+	delete(s.data.Users, username)
+	if err := s.saveLocked(); err != nil {
+		return User{}, nil, err
+	}
+	return *u, active, nil
+}
+
 // hashToken returns the hex SHA-256 of a per-user token. Only this hash is
 // ever persisted or compared.
 func hashToken(token string) string {

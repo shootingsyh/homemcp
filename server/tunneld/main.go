@@ -102,6 +102,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/enrollments", s.handleCreateEnrollment)
 	mux.HandleFunc("GET /api/v1/enrollments/{id}", s.handleGetEnrollment)
 	mux.HandleFunc("GET /api/v1/account", s.handleGetAccount)
+	mux.HandleFunc("DELETE /api/v1/account", s.handleDeleteAccount)
 	mux.HandleFunc("POST /api/v1/account/portal", s.handlePortal)
 	// ACME DNS-01 challenges for per-user certificates (certs.go):
 	// the client publishes its challenge TXT through tunneld because
@@ -111,6 +112,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/certificates/dns-challenges/{id}", s.handleGetChallenge)
 	mux.HandleFunc("DELETE /api/v1/certificates/dns-challenges/{id}", s.handleDeleteChallenge)
 	mux.HandleFunc("GET /api/v1/admin/users", s.handleAdminUsers)
+	mux.HandleFunc("POST /api/v1/admin/users/{username}/reset-credentials", s.handleAdminResetCredentials)
+	mux.HandleFunc("DELETE /api/v1/admin/users/{username}", s.handleAdminDeleteUser)
 	// Stripe webhooks.
 	mux.HandleFunc("POST /webhooks/stripe", s.handleStripeWebhook)
 	// Mock allowlist administration (admin key required; the handlers

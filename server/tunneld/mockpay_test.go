@@ -151,19 +151,27 @@ func TestMockPayFlowAnnualTrial(t *testing.T) {
 		t.Errorf("mock user unexpectedly has Stripe IDs: %+v", u)
 	}
 
-	// Claim issues the token exactly once.
+	// Claim issues the token. Mock accounts are reusable test
+	// accounts: a second poll ROTATES the token and returns fresh
+	// credentials (real accounts stay claim-exactly-once — see
+	// reclaim_test.go). The first token dies at rotation.
 	status, resp = doJSON(t, "GET", ts.URL+"/api/v1/enrollments/"+enrollmentID, nil, nil)
 	if status != 200 || resp["status"] != EnrollmentClaimed {
 		t.Fatalf("claim: %d %v", status, resp)
 	}
 	creds, _ := resp["credentials"].(map[string]any)
-	token, _ := creds["token"].(string)
-	if token == "" {
+	firstToken, _ := creds["token"].(string)
+	if firstToken == "" {
 		t.Fatalf("claim issued no credentials: %v", resp)
 	}
 	status, resp = doJSON(t, "GET", ts.URL+"/api/v1/enrollments/"+enrollmentID, nil, nil)
-	if status != 200 || resp["credentials"] != nil {
-		t.Fatalf("second claim leaked credentials: %d %v", status, resp)
+	creds, _ = resp["credentials"].(map[string]any)
+	token, _ := creds["token"].(string)
+	if status != 200 || token == "" || token == firstToken {
+		t.Fatalf("mock re-claim should return a fresh rotated token: %d %v", status, resp)
+	}
+	if loginResp := s.pluginLogin(loginContentJSON("alice", firstToken)); !loginResp.Reject {
+		t.Fatal("pre-rotation token still accepted after mock re-claim")
 	}
 
 	// Account view: trialing, tunnel allowed, trial_end exposed.

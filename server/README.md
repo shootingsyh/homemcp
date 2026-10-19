@@ -315,8 +315,12 @@ tunneld is a single Go binary; each runs under its own systemd unit
 - The **enrollment ID is a bearer capability** for claiming
   credentials (see CLIENT_CONTRACT.md). It is 128-bit random and shown
   only in the creating client's session. Lost per-user tokens cannot
-  be re-displayed (hash-only storage) — recovery is an operator reset
-  (roadmap, not built yet).
+  be re-displayed (hash-only storage) — recovery is rotation via the
+  operator endpoint `POST /api/v1/admin/users/{username}/reset-credentials`.
+  Mock (test) accounts are deliberately reusable instead: re-polling a
+  claimed enrollment rotates and re-issues credentials, and a mock
+  account can delete itself with `DELETE /api/v1/account` (or be
+  deleted by the operator) for a clean-slate re-enrollment.
 - HomeMCP's own Bearer Token (MCP-layer auth) is a separate secret
   that stays between the MCP client and the home endpoint; it never
   transits or is stored by this relay — and thanks to passthrough, the

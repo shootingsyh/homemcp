@@ -21,7 +21,8 @@ All request/response bodies are JSON. All timestamps are RFC 3339 UTC.
   Shown **exactly once**, at claim time. The server stores only its
   SHA-256 hash; it cannot be re-displayed. The client must persist it
   in its OS credential store and treat "lost token" as a
-  contact-support flow.
+  contact-support flow. (Mock test accounts are the exception —
+  see Mock Pay: they can re-claim and self-delete.)
 - **Bootstrap token** — a shared frps token embedded in the HomeMCP
   app itself. Not user-specific, not a credential. The client fills it
   into the frpc config's `auth.token` (the claimed config contains the
@@ -254,6 +255,24 @@ with `trial_end` = activation + 7 days (and `trial_end` set in the
 account view); monthly → `active` immediately. Mock accounts report
 `"mock": true` in the account view.
 
+### Test-account reuse and cleanup (mock accounts only)
+
+Mock accounts exist to be reused, so they are exempt from
+claim-exactly-once:
+
+- **Re-claim:** polling an already-claimed enrollment again returns
+  **fresh credentials with a rotated token** (the previous token
+  stops working immediately). Client development can wipe local
+  state and re-claim the same test username at will.
+- **Self-delete:** `DELETE /api/v1/account` with the account's own
+  Bearer token deletes the mock account completely — user,
+  enrollments, DNS challenges (including provider-side TXT cleanup)
+  — and the username can immediately be enrolled again from a clean
+  slate. A real account calling it gets `409 not_mock_account`.
+  The operator's allowlist entry is separate and survives deletion,
+  so re-enrollment stays payment-free until the operator removes
+  the name from the allowlist.
+
 ### Subscription-event test hook (operator/admin only)
 
 To exercise the states real Stripe webhooks produce, an admin-key
@@ -308,6 +327,24 @@ DELETE /api/v1/admin/mock-users/{username}
 X-Admin-Key: <operator key>
 ```
 
+Credential recovery and test-account cleanup:
+
+```
+POST   /api/v1/admin/users/{username}/reset-credentials
+DELETE /api/v1/admin/users/{username}
+X-Admin-Key: <operator key>
+```
+
+`reset-credentials` rotates the user's token (the old one dies
+immediately) and returns fresh `{username, token, subdomain,
+frpc_config}` once, in the admin response — the recovery path for
+hash-only storage, to be relayed to the user over a trusted channel.
+The DELETE removes a **mock account only** (user, enrollments,
+challenges, provider TXT records) so a test username starts over
+clean; real accounts get `409 not_mock_account`. A mock account can
+also delete **itself** — see
+[Test-account reuse and cleanup](#test-account-reuse-and-cleanup-mock-accounts-only).
+
 ## Error format
 
 All errors are `{ "error": { "code": "<stable code>", "message": "<human text>" } }`.
@@ -318,6 +355,7 @@ Stable codes: `bad_request`, `invalid_username`, `username_reserved`,
 `unauthorized`, `no_billing_account`, `stripe_not_configured`,
 `stripe_error`, `admin_disabled`, `invalid_signature` (webhooks),
 `user_not_found`, `invalid_event` (mock-pay test hook),
+`not_mock_account`,
 `cert_dns_not_configured`, `subscription_inactive`, `invalid_txt_value`,
 `challenge_not_found`, `challenge_limit`, `challenge_rate_limited`,
 `dns_provider_error`, `internal`.

@@ -21,7 +21,7 @@ import (
 //   bad_request, invalid_username, username_reserved, username_taken,
 //   invalid_plan, enrollment_not_found, credentials_not_ready,
 //   unauthorized, no_billing_account, stripe_not_configured,
-//   admin_disabled, user_not_found, invalid_event,
+//   admin_disabled, user_not_found, invalid_event, not_mock_account,
 //   cert_dns_not_configured, subscription_inactive, invalid_txt_value,
 //   challenge_not_found, challenge_limit, challenge_rate_limited,
 //   dns_provider_error, internal.
@@ -258,7 +258,35 @@ func (s *Server) handleGetEnrollment(w http.ResponseWriter, r *http.Request) {
 		view.SubStatus = u.SubStatus
 	}
 	if enr.Status != EnrollmentReady {
-		// pending_payment, or already claimed (credentials gone for good).
+		// pending_payment, or already claimed. For real accounts a
+		// claimed enrollment never yields credentials again (recovery
+		// is the operator reset endpoint). Mock (test) accounts are
+		// the deliberate exception: they are reusable, so re-polling a
+		// claimed enrollment ROTATES the token and returns fresh
+		// credentials — client development can wipe local state and
+		// re-claim the same test username at will.
+		if enr.Status == EnrollmentClaimed {
+			if u, ok := s.store.GetUser(enr.Username); ok && u.Mock {
+				token, err := generateToken()
+				if err != nil {
+					writeAPIError(w, http.StatusInternalServerError, "internal", "could not generate credentials")
+					return
+				}
+				user, err := s.store.RotateUserToken(enr.Username, hashToken(token))
+				if err != nil {
+					writeAPIError(w, http.StatusInternalServerError, "internal", "could not re-issue credentials")
+					return
+				}
+				log.Printf("mock account %q: credentials re-issued via enrollment re-claim (token rotated)", user.Username)
+				view.SubStatus = user.SubStatus
+				view.Credentials = &credentialsView{
+					Username:   user.Username,
+					Token:      token,
+					Subdomain:  user.Subdomain,
+					FRPCConfig: s.renderFRPCConfig(user, token),
+				}
+			}
+		}
 		writeJSON(w, http.StatusOK, view)
 		return
 	}
@@ -476,4 +504,120 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		views = append(views, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": views})
+}
+
+// handleAdminResetCredentials is POST
+// /api/v1/admin/users/{username}/reset-credentials (X-Admin-Key). It
+// is the credential-recovery path for hash-only storage: the stored
+// token can never be shown again, so recovery means ROTATION — a
+// fresh token is generated, its hash replaces the old one (the old
+// token dies immediately), and the new credentials are returned once,
+// in this admin response, for the operator to relay to the user
+// through a trusted channel. The HomeMCP client then stores the new
+// token and reconnects; nothing else about the account changes.
+func (s *Server) handleAdminResetCredentials(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	username := r.PathValue("username")
+	if _, ok := s.store.GetUser(username); !ok {
+		writeAPIError(w, http.StatusNotFound, "user_not_found", "no such user")
+		return
+	}
+	token, err := generateToken()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not generate credentials")
+		return
+	}
+	user, err := s.store.RotateUserToken(username, hashToken(token))
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not rotate credentials")
+		return
+	}
+	log.Printf("admin: credentials reset for user %q (old token invalidated)", username)
+	writeJSON(w, http.StatusOK, credentialsView{
+		Username:   user.Username,
+		Token:      token,
+		Subdomain:  user.Subdomain,
+		FRPCConfig: s.renderFRPCConfig(user, token),
+	})
+}
+
+// handleAdminDeleteUser is DELETE /api/v1/admin/users/{username}
+// (X-Admin-Key): complete cleanup of a MOCK (test) account — the
+// user, its enrollments and its DNS challenges are removed, and any
+// still-active challenge TXT records are deleted at the provider.
+// The username can then be enrolled again from a clean slate. The
+// mock allowlist entry is deliberately KEPT (re-enrollment stays
+// payment-free); removing it is the separate
+// DELETE /api/v1/admin/mock-users/{username} endpoint. Real (paying)
+// accounts are refused with 409 not_mock_account: deleting one is a
+// billing operation, not test hygiene.
+func (s *Server) handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	username := r.PathValue("username")
+	u, ok := s.store.GetUser(username)
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "user_not_found", "no such user")
+		return
+	}
+	if !u.Mock {
+		writeAPIError(w, http.StatusConflict, "not_mock_account", "only mock (test) accounts can be deleted via the API")
+		return
+	}
+	if err := s.deleteAccountFully(r, username); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not delete user")
+		return
+	}
+	log.Printf("admin: mock user %q deleted (account, enrollments, challenges cleaned up)", username)
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": username})
+}
+
+// deleteAccountFully removes a user with all its state and
+// best-effort deletes any still-active challenge TXT records at the
+// DNS provider. Shared by the admin delete and the self-delete.
+func (s *Server) deleteAccountFully(r *http.Request, username string) error {
+	_, active, err := s.store.DeleteUser(username)
+	if err != nil {
+		return err
+	}
+	if s.cfg.CertDNSConfigured() {
+		for _, ch := range active {
+			if ch.CFRecordID != "" {
+				// The account is gone either way; a leftover TXT
+				// also expires with the record's TTL.
+				_ = s.cfClient().deleteRecord(r.Context(), ch.CFRecordID)
+			}
+		}
+	}
+	return nil
+}
+
+// handleDeleteAccount is DELETE /api/v1/account (Bearer per-user
+// token): a MOCK (test) account deleting ITSELF. Client development
+// uses it to wipe a test account after a run — token, enrollments and
+// challenges all go, and the username can immediately be enrolled
+// again from a clean slate (the mock allowlist entry, an operator
+// setting, is not the account's to remove and stays). Real accounts
+// are refused with 409 not_mock_account: a paying user's exit path
+// is cancelling in the billing portal, after which the webhook
+// lifecycle closes the tunnel — self-service hard deletion of
+// billing accounts is deliberately not offered.
+func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.bearerUser(w, r)
+	if !ok {
+		return
+	}
+	if !u.Mock {
+		writeAPIError(w, http.StatusConflict, "not_mock_account", "only mock (test) accounts can delete themselves")
+		return
+	}
+	if err := s.deleteAccountFully(r, u.Username); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not delete account")
+		return
+	}
+	log.Printf("mock account %q self-deleted (test cleanup)", u.Username)
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": u.Username})
 }
