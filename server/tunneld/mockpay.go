@@ -9,29 +9,45 @@ import (
 	"time"
 )
 
-// Mock pay: an internal, Stripe-shaped payment stand-in for client
-// development, enabled only by TUNNELD_MOCK_PAY=1 (see config.go).
+// Mock pay: the server-side payment stand-in. Payment is ALWAYS a
+// server decision — a client can never assert "I paid"; it can only
+// enroll and poll. Two mechanisms, both funnelling into the same
+// activateEnrollment path and markUser* transitions the Stripe webhook
+// handlers use, so everything downstream (claim, account view, plugin
+// gate) is the production code path, exercised unchanged:
 //
-// It exists so the HomeMCP client's registration flow can be built and
-// tested before any real Stripe account exists. To keep that honest,
-// mock pay is NOT a parallel billing system: the checkout page finishes
-// by calling the same activateEnrollment funnel a Stripe
-// checkout.session.completed webhook calls, and the subscription-event
-// hook drives the same markUser* transitions the webhook handlers use.
-// Everything downstream — claim, account view, plugin gate — is the
-// production code path, exercised unchanged.
+//  1. Mock allowlist (any instance, incl. production): the operator
+//     names specific usernames via the admin API below. When a listed
+//     username enrolls, the server activates it immediately — no
+//     Stripe, no checkout page, checkout_url comes back empty. This is
+//     how named testers (friends, the client developer, the operator
+//     themselves) get accounts before/without real billing. Activated
+//     accounts are permanently flagged User.Mock and carry no Stripe
+//     linkage; exclude them from revenue accounting.
 //
-// Endpoints (registered only in mock mode; 404 otherwise):
+//  2. Global mock mode (TUNNELD_MOCK_PAY=1, internal/dev instances
+//     only): EVERY enrollment returns a local /mock-pay/<id> checkout
+//     page instead of Stripe Checkout, so the client's registration
+//     flow can be built and tested before any Stripe account exists.
 //
-//	GET  /mock-pay/{enrollment_id}                mock checkout page
-//	POST /mock-pay/{enrollment_id}                "pay" -> activate
-//	POST /api/v1/mock/users/{username}/subscription-event
-//	                                              admin-only test hook
+// Endpoints:
 //
-// SECURITY: anyone holding an enrollment link can open the mock page
-// and activate that account for free. That is acceptable ONLY on
-// internal/dev deployments. Never enable in production (README has the
-// warning in bigger letters).
+//	GET    /api/v1/admin/mock-users               list allowlist (admin)
+//	PUT    /api/v1/admin/mock-users/{username}    add/refresh (admin)
+//	DELETE /api/v1/admin/mock-users/{username}    remove (admin)
+//	POST   /api/v1/mock/users/{username}/subscription-event
+//	        admin-only lifecycle hook; available when global mock mode
+//	        is on OR the target account is a mock account
+//	GET    /mock-pay/{enrollment_id}              global mock mode only
+//	POST   /mock-pay/{enrollment_id}              global mock mode only
+//
+// SECURITY: the allowlist is gated by the admin key and every
+// activation is logged — treat a leaked admin key as a billing breach.
+// The global-mode checkout page is different: anyone holding an
+// enrollment link can open it and activate that account for free.
+// That is acceptable ONLY on internal/dev deployments; never enable
+// global mock mode in production (README has the warning in bigger
+// letters).
 
 // mockTrialLength mirrors the annual plan's Stripe trial
 // (subscription_data.trial_period_days=7 on the real checkout).
@@ -164,7 +180,9 @@ func (s *Server) handleMockPaySubmit(w http.ResponseWriter, r *http.Request) {
 // would have produced for this plan and applies it via the shared
 // funnel: annual starts the 7-day trial (trial_end recorded, period
 // end = trial end, exactly like a trialing Stripe subscription);
-// monthly is active immediately with a one-month period.
+// monthly is active immediately with a one-month period. The account
+// is permanently flagged Mock so admin views and accounting can tell
+// it apart from a paying subscriber.
 func (s *Server) activateMockEnrollment(enr Enrollment) {
 	now := time.Now().UTC()
 	act := activation{status: SubStatusActive, periodEnd: now.AddDate(0, 1, 0)}
@@ -175,6 +193,7 @@ func (s *Server) activateMockEnrollment(enr Enrollment) {
 		act.periodEnd = trialEnd
 	}
 	s.activateEnrollment(enr, act)
+	_ = s.store.UpdateUser(enr.Username, func(u *User) { u.Mock = true })
 }
 
 type mockSubscriptionEventRequest struct {
@@ -182,10 +201,14 @@ type mockSubscriptionEventRequest struct {
 }
 
 // handleMockSubscriptionEvent is
-// POST /api/v1/mock/users/{username}/subscription-event (mock mode
-// only, X-Admin-Key required). It lets the client developer drive a
-// user's subscription through the states real Stripe webhooks produce,
-// using the same markUser* transitions:
+// POST /api/v1/mock/users/{username}/subscription-event (X-Admin-Key
+// required). Eligibility: global mock mode, OR the target account is
+// a mock account (allowlist / mock-page activated) — so an operator
+// can drive a named tester's lifecycle on the production instance
+// without enabling global mock mode for everyone. Anyone else gets
+// the same 404 as an unknown user. It lets the client developer drive
+// a user's subscription through the states real Stripe webhooks
+// produce, using the same markUser* transitions:
 //
 //	"invoice.paid"           -> active, grace cleared
 //	"invoice.payment_failed" -> past_due, grace_until = now + 3 days
@@ -201,7 +224,7 @@ func (s *Server) handleMockSubscriptionEvent(w http.ResponseWriter, r *http.Requ
 	}
 	username := strings.ToLower(strings.TrimSpace(r.PathValue("username")))
 	u, ok := s.store.GetUser(username)
-	if !ok {
+	if !ok || (!s.cfg.MockPay && !u.Mock) {
 		writeAPIError(w, http.StatusNotFound, "user_not_found", "no such user")
 		return
 	}
@@ -227,4 +250,96 @@ func (s *Server) handleMockSubscriptionEvent(w http.ResponseWriter, r *http.Requ
 	}
 	updated, _ := s.store.GetUser(username)
 	writeJSON(w, http.StatusOK, accountViewOf(updated))
+}
+
+// ---------- mock allowlist administration (X-Admin-Key) ----------
+
+type mockUserView struct {
+	Username  string `json:"username"`
+	Subdomain string `json:"subdomain"`
+	Note      string `json:"note,omitempty"`
+	AddedAt   string `json:"added_at"`
+}
+
+func (s *Server) mockUserViewOf(e MockUserEntry) mockUserView {
+	return mockUserView{
+		Username:  e.Username,
+		Subdomain: s.cfg.SubdomainFor(e.Username),
+		Note:      e.Note,
+		AddedAt:   e.AddedAt.Format(time.RFC3339),
+	}
+}
+
+// handleAdminListMockUsers is GET /api/v1/admin/mock-users.
+func (s *Server) handleAdminListMockUsers(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	entries := s.store.ListMockUsers()
+	views := make([]mockUserView, 0, len(entries))
+	for _, e := range entries {
+		views = append(views, s.mockUserViewOf(e))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"mock_users": views})
+}
+
+type putMockUserRequest struct {
+	Note string `json:"note"`
+}
+
+// handleAdminPutMockUser is PUT /api/v1/admin/mock-users/{username}:
+// add the name to the allowlist (or refresh its note). Add names
+// BEFORE the person enrolls — listing an already-registered username
+// changes nothing for that existing account. The username must pass
+// the same validation as a real registration.
+func (s *Server) handleAdminPutMockUser(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	username, code, ok := validateUsername(r.PathValue("username"))
+	if !ok {
+		msg := "username must be 3-30 chars of [a-z0-9-], starting and ending with a letter or digit"
+		if code == "username_reserved" {
+			msg = "this username is reserved"
+		}
+		writeAPIError(w, http.StatusUnprocessableEntity, code, msg)
+		return
+	}
+	var req putMockUserRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
+		if err := dec.Decode(&req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "bad_request", "request body must be JSON {note}")
+			return
+		}
+	}
+	entry, err := s.store.AddMockUser(username, strings.TrimSpace(req.Note))
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not store mock user")
+		return
+	}
+	log.Printf("mock allowlist: %q added by admin (subdomain %s)", username, s.cfg.SubdomainFor(username))
+	writeJSON(w, http.StatusOK, s.mockUserViewOf(entry))
+}
+
+// handleAdminDeleteMockUser is DELETE /api/v1/admin/mock-users/{username}.
+// Removal stops FUTURE no-payment enrollments for the name; an account
+// that already activated stays active (drive it with the
+// subscription-event hook if it must be canceled).
+func (s *Server) handleAdminDeleteMockUser(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	username := strings.ToLower(strings.TrimSpace(r.PathValue("username")))
+	removed, err := s.store.RemoveMockUser(username)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "internal", "could not update mock allowlist")
+		return
+	}
+	if !removed {
+		writeAPIError(w, http.StatusNotFound, "mock_user_not_found", "username is not on the mock allowlist")
+		return
+	}
+	log.Printf("mock allowlist: %q removed by admin", username)
+	writeJSON(w, http.StatusOK, map[string]any{"username": username, "removed": true})
 }

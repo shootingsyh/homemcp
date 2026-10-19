@@ -90,7 +90,38 @@ token *hashes* and Stripe IDs, never plaintext tokens or card data.
 - **Cancel:** `customer.subscription.deleted` → `canceled` → access
   stops at the next login/proxy registration.
 
-## Mock pay (internal testing only)
+## Mock pay (server-side, two mechanisms)
+
+Payment is always decided on the server — a client can only enroll
+and poll; it can never assert "I paid". Two mock mechanisms exist:
+
+### Per-username allowlist (named testers, production-safe)
+
+The operator keeps a mock allowlist in the server store, managed with
+the admin key:
+
+```bash
+curl -X PUT    $BASE/api/v1/admin/mock-users/<username> \
+     -H "X-Admin-Key: $TUNNELD_ADMIN_KEY" -d '{"note":"friend tester"}'
+curl           $BASE/api/v1/admin/mock-users -H "X-Admin-Key: $TUNNELD_ADMIN_KEY"
+curl -X DELETE $BASE/api/v1/admin/mock-users/<username> -H "X-Admin-Key: $TUNNELD_ADMIN_KEY"
+```
+
+When a listed username enrolls, the server activates the enrollment
+immediately — no Stripe call, no checkout page; the enrollment
+response carries `checkout_url: ""` and `status: "ready"`, and the
+client simply polls and claims. Add names **before** the person
+enrolls (listing an existing username changes nothing for that
+account). Plan semantics match the real checkout (annual → 7-day
+`trialing`, monthly → `active`), activated accounts are permanently
+flagged `"mock": true` in admin/account views and carry no Stripe
+linkage (keep them out of revenue accounting), and every allowlist
+activation is logged. Removing a name stops future no-payment
+enrollments; an already-activated account stays active (cancel it
+with the subscription-event hook below, which works for mock accounts
+even when global mock mode is off).
+
+### Global mock mode (internal testing only)
 
 Setting `TUNNELD_MOCK_PAY=1` swaps Stripe for a built-in mock payment
 provider so the HomeMCP client's registration flow can be developed
@@ -108,15 +139,19 @@ and tested before a real Stripe account exists:
   transitions as the Stripe webhooks: `invoice.paid`,
   `invoice.payment_failed` (past_due + 3-day grace),
   `subscription.deleted`, `trial.end`.
-- With mock pay off, none of these routes exist (plain 404s).
-  tunneld logs a loud startup warning whenever mock pay is on.
+- With global mock mode off, the `/mock-pay/…` pages don't exist
+  (plain 404s) and the event hook only serves mock accounts.
+  tunneld logs a loud startup warning whenever mock mode is on.
 
-> **⚠ NEVER enable mock pay in production.** Anyone who obtains an
-> enrollment link can open the mock page and activate that account
-> **for free** — there is no card, no charge, no identity check. Run
-> it only on internal/dev deployments (staging relay, LAN, localhost)
-> for client development, and double-check `TUNNELD_MOCK_PAY` is unset
-> (or `0`) before any public deployment.
+> **⚠ NEVER enable global mock mode in production.** Anyone who
+> obtains an enrollment link can open the mock page and activate that
+> account **for free** — there is no card, no charge, no identity
+> check. Run it only on internal/dev deployments (staging relay, LAN,
+> localhost) for client development, and double-check
+> `TUNNELD_MOCK_PAY` is unset (or `0`) before any public deployment.
+> (The allowlist above is the production-safe mechanism: only the
+> exact usernames the operator named can skip payment, and only via
+> the admin key.)
 
 ## Standalone mock instance (for client development)
 

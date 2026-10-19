@@ -99,6 +99,14 @@ type createEnrollmentResponse struct {
 // then reserve the enrollment, then create the checkout. With mock pay
 // enabled (internal testing only) the config check is skipped and the
 // "checkout" is tunneld's own /mock-pay/<id> page instead of Stripe.
+//
+// Exception to the config check: a username on the operator's mock
+// allowlist (store.MockUsers, admin-managed) skips payment entirely on
+// ANY instance — no Stripe, no mock page. The enrollment is activated
+// server-side the moment it is created and the response carries an
+// empty checkout_url with status "ready"; the client just polls.
+// Payment is ALWAYS decided here on the server: a client can never
+// assert "I paid" (see mockpay.go for the allowlist endpoints).
 func (s *Server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) {
 	var req createEnrollmentRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
@@ -119,7 +127,8 @@ func (s *Server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusUnprocessableEntity, "invalid_plan", "plan must be \"annual\" or \"monthly\"")
 		return
 	}
-	if !s.cfg.MockPay && !s.cfg.StripeConfigured() {
+	mockListed := s.store.IsMockUser(username)
+	if !mockListed && !s.cfg.MockPay && !s.cfg.StripeConfigured() {
 		writeAPIError(w, http.StatusServiceUnavailable, "stripe_not_configured", "billing is not configured on this server yet")
 		return
 	}
@@ -146,6 +155,24 @@ func (s *Server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		writeAPIError(w, http.StatusInternalServerError, "internal", "could not store enrollment")
+		return
+	}
+	if mockListed {
+		// Operator allowlist: pretend the payment already happened.
+		// Activation goes through the same funnel + plan semantics as
+		// a completed checkout; no URL is handed out because there is
+		// nothing for the user to do in a browser.
+		s.activateMockEnrollment(enr)
+		log.Printf("mock allowlist: enrollment %s for %q (%s) activated without payment", enr.ID, username, req.Plan)
+		enr, _ = s.store.GetEnrollment(enr.ID)
+		writeJSON(w, http.StatusCreated, createEnrollmentResponse{
+			EnrollmentID: enr.ID,
+			CheckoutURL:  "",
+			Status:       enr.Status,
+			Username:     username,
+			Plan:         req.Plan,
+			Subdomain:    s.cfg.SubdomainFor(username),
+		})
 		return
 	}
 	if s.cfg.MockPay {
@@ -321,6 +348,7 @@ type accountView struct {
 	Subdomain        string `json:"subdomain"`
 	Plan             string `json:"plan"`
 	SubStatus        string `json:"sub_status"`
+	Mock             bool   `json:"mock,omitempty"`               // operator-granted account, no real payment
 	CurrentPeriodEnd string `json:"current_period_end,omitempty"` // RFC3339, when known
 	TrialEnd         string `json:"trial_end,omitempty"`          // set only while trialing, when known
 	GraceUntil       string `json:"grace_until,omitempty"`        // set only while past_due
@@ -334,6 +362,7 @@ func accountViewOf(u User) accountView {
 		Subdomain:     u.Subdomain,
 		Plan:          u.Plan,
 		SubStatus:     u.SubStatus,
+		Mock:          u.Mock,
 		TunnelAllowed: allowed,
 	}
 	if !u.CurrentPeriodEnd.IsZero() {
@@ -386,6 +415,7 @@ type adminUserView struct {
 	Subdomain            string `json:"subdomain"`
 	Plan                 string `json:"plan"`
 	SubStatus            string `json:"sub_status"`
+	Mock                 bool   `json:"mock,omitempty"` // activated without a real payment
 	StripeCustomerID     string `json:"stripe_customer_id,omitempty"`
 	StripeSubscriptionID string `json:"stripe_subscription_id,omitempty"`
 	CurrentPeriodEnd     string `json:"current_period_end,omitempty"`
@@ -425,6 +455,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 			Subdomain:            u.Subdomain,
 			Plan:                 u.Plan,
 			SubStatus:            u.SubStatus,
+			Mock:                 u.Mock,
 			StripeCustomerID:     u.StripeCustomerID,
 			StripeSubscriptionID: u.StripeSubscriptionID,
 			CreatedAt:            u.CreatedAt.Format(time.RFC3339),

@@ -72,6 +72,13 @@ func main() {
 	if cfg.MockPay {
 		log.Printf("WARNING: MOCK PAY ENABLED — NOT FOR PRODUCTION: enrollments can be self-activated for free via /mock-pay/<id>; use on internal/dev deployments only")
 	}
+	if entries := store.ListMockUsers(); len(entries) > 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Username)
+		}
+		log.Printf("mock allowlist active: %d username(s) enroll without payment: %v", len(names), names)
+	}
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("tunneld: serve: %v", err)
 	}
@@ -90,12 +97,21 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/admin/users", s.handleAdminUsers)
 	// Stripe webhooks.
 	mux.HandleFunc("POST /webhooks/stripe", s.handleStripeWebhook)
-	// Mock pay (internal testing only): registered ONLY when mock mode
-	// is enabled, so in production these paths are plain 404s.
+	// Mock allowlist administration (admin key required; the handlers
+	// enforce it). Available on every instance — this is how named
+	// testers get no-payment accounts on production.
+	mux.HandleFunc("GET /api/v1/admin/mock-users", s.handleAdminListMockUsers)
+	mux.HandleFunc("PUT /api/v1/admin/mock-users/{username}", s.handleAdminPutMockUser)
+	mux.HandleFunc("DELETE /api/v1/admin/mock-users/{username}", s.handleAdminDeleteMockUser)
+	// Mock lifecycle hook: always routed; the handler itself only
+	// serves global-mock mode or mock accounts (404 otherwise).
+	mux.HandleFunc("POST /api/v1/mock/users/{username}/subscription-event", s.handleMockSubscriptionEvent)
+	// Mock checkout pages (internal testing only): registered ONLY
+	// when global mock mode is enabled, so in production these paths
+	// are plain 404s.
 	if s.cfg.MockPay {
 		mux.HandleFunc("GET /mock-pay/{id}", s.handleMockPayPage)
 		mux.HandleFunc("POST /mock-pay/{id}", s.handleMockPaySubmit)
-		mux.HandleFunc("POST /api/v1/mock/users/{username}/subscription-event", s.handleMockSubscriptionEvent)
 	}
 	// Liveness probe for the operator / systemd.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {

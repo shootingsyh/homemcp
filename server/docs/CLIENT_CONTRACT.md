@@ -63,6 +63,12 @@ POST /api/v1/enrollments
   mock-pay test servers it points at the server's own `/mock-pay/…`
   page instead — treat the URL as opaque either way, see
   [Mock Pay](#mock-pay-internal-testing)).
+- **Operator-granted accounts:** if the operator has allowlisted the
+  username server-side (named testers), the `201` instead carries
+  `checkout_url: ""` and `status: "ready"` — payment was settled on
+  the server and there is nothing to open. Skip the browser step and
+  go straight to polling (step 2). The account view later reports
+  `"mock": true` for such accounts.
 
 Errors: `422 invalid_username`, `422 username_reserved`,
 `409 username_taken`, `422 invalid_plan`, `503 stripe_not_configured`,
@@ -158,26 +164,30 @@ Errors: `401 unauthorized`, `409 no_billing_account`,
 
 ## Mock Pay (internal testing)
 
-Internal/dev servers may run with mock pay enabled
-(`TUNNELD_MOCK_PAY=1`, operator-side). **Production never does.** It
-exists so this client flow can be built and tested before a real
-Stripe account exists.
+Mock payment is a **server-side** decision in two forms; the client
+never declares itself paid — it enrolls and polls, and the server
+decides what "paid" means for that username:
 
-From the client's perspective, exactly one thing differs:
-
-- The `checkout_url` returned by `POST /api/v1/enrollments` points at
-  `{API_PUBLIC_BASE}/mock-pay/{enrollment_id}` instead of
-  `checkout.stripe.com`. It is a plain HTML page (visually branded
-  "MOCK PAY — internal test only, no real charge") with a single
-  **Pay (mock)** button. Open it in the system browser exactly like a
-  Stripe Checkout URL; never special-case its host or content.
+1. **Allowlist (any server, incl. production):** the operator names
+   specific usernames. Their enrollments come back already `ready`
+   with an empty `checkout_url` (see step 1) — nothing for the
+   client to do differently beyond skipping the browser step.
+2. **Global mock mode (internal/dev servers only,**
+   `TUNNELD_MOCK_PAY=1` operator-side; production never enables it):
+   every enrollment's `checkout_url` points at
+   `{API_PUBLIC_BASE}/mock-pay/{enrollment_id}` instead of
+   `checkout.stripe.com`. It is a plain HTML page (visually branded
+   "MOCK PAY — internal test only, no real charge") with a single
+   **Pay (mock)** button. Open it in the system browser exactly like
+   a Stripe Checkout URL; never special-case its host or content.
 
 Everything else is identical: the enrollment, poll/claim, account,
 and state semantics are the same endpoints with the same shapes,
-because the mock page activates the enrollment through the same
-server-side funnel as the Stripe webhook. Plan behaviour matches too:
-annual → `trialing` with `trial_end` = activation + 7 days (and
-`trial_end` set in the account view); monthly → `active` immediately.
+because mock activation goes through the same server-side funnel as
+the Stripe webhook. Plan behaviour matches too: annual → `trialing`
+with `trial_end` = activation + 7 days (and `trial_end` set in the
+account view); monthly → `active` immediately. Mock accounts report
+`"mock": true` in the account view.
 
 ### Subscription-event test hook (operator/admin only)
 
@@ -198,9 +208,11 @@ X-Admin-Key: <operator key>
 | `subscription.deleted` | → `canceled` (the plugin rejects the user's frpc at its next login/proxy registration; `tunnel_allowed` becomes `false`) |
 
 `200` → the resulting account view (same JSON as `GET /api/v1/account`).
-Errors: `404` for the whole route when mock pay is disabled,
-`401 unauthorized` without/with a wrong admin key,
-`404 user_not_found`, `422 invalid_event`.
+The hook serves an account when global mock mode is on, or when the
+account is a mock (allowlist) account on any server; a real paying
+account with mock mode off gets the same `404 user_not_found` as an
+unknown user. Errors: `401 unauthorized` without/with a wrong admin
+key, `404 user_not_found`, `422 invalid_event`.
 
 ## Admin (operator only, not for clients)
 
@@ -209,9 +221,18 @@ GET /api/v1/admin/users
 X-Admin-Key: <operator key>
 ```
 
-Lists users with plan/status/Stripe IDs. Never returns token hashes.
-`503 admin_disabled` when no key is configured server-side;
-`401 unauthorized` on a wrong key.
+Lists users with plan/status/Stripe IDs and the `mock` flag. Never
+returns token hashes. `503 admin_disabled` when no key is configured
+server-side; `401 unauthorized` on a wrong key.
+
+Mock allowlist (see [Mock Pay](#mock-pay-internal-testing)):
+
+```
+GET    /api/v1/admin/mock-users
+PUT    /api/v1/admin/mock-users/{username}     { "note": "…" } (optional)
+DELETE /api/v1/admin/mock-users/{username}
+X-Admin-Key: <operator key>
+```
 
 ## Error format
 

@@ -41,13 +41,17 @@ type Config struct {
 	// Empty disables the admin endpoint entirely.
 	AdminKey string
 
-	// MockPay enables the internal mock payment provider
-	// (TUNNELD_MOCK_PAY=1/true): enrollments return a local
-	// /mock-pay/<enrollment_id> checkout URL instead of a Stripe
-	// Checkout Session, and admin-only subscription-event hooks are
-	// registered for client development. It takes precedence over
-	// Stripe when both are set. NEVER enable in production — anyone
-	// holding an enrollment link can self-activate for free.
+	// MockPay enables GLOBAL mock mode (TUNNELD_MOCK_PAY=1/true):
+	// every enrollment returns a local /mock-pay/<enrollment_id>
+	// checkout URL instead of a Stripe Checkout Session. It takes
+	// precedence over Stripe when both are set. NEVER enable in
+	// production — anyone holding an enrollment link can
+	// self-activate for free.
+	//
+	// This is separate from the per-username mock ALLOWLIST
+	// (store.MockUsers, managed via the admin API), which works on
+	// any instance and is the production-safe way to grant named
+	// testers a no-payment account. See mockpay.go.
 	MockPay bool
 
 	// FRPSAddr / FRPSPort locate the frps control port for the frpc

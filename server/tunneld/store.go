@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -40,10 +41,15 @@ const (
 // token is ever stored; the plaintext token exists only in the claim
 // response (and on the user's machine after that).
 type User struct {
-	Username             string    `json:"username"`
-	TokenHash            string    `json:"token_hash,omitempty"` // hex SHA-256 of the per-user token
-	Subdomain            string    `json:"subdomain"`
-	Plan                 string    `json:"plan"` // annual | monthly
+	Username  string `json:"username"`
+	TokenHash string `json:"token_hash,omitempty"` // hex SHA-256 of the per-user token
+	Subdomain string `json:"subdomain"`
+	Plan      string `json:"plan"` // annual | monthly
+	// Mock marks an account that was activated WITHOUT a real payment
+	// (mock allowlist or mock-pay page — see mockpay.go). Mock accounts
+	// are operator-granted test accounts: they carry no Stripe linkage
+	// and must be excluded from any revenue accounting.
+	Mock                 bool      `json:"mock,omitempty"`
 	StripeCustomerID     string    `json:"stripe_customer_id,omitempty"`
 	StripeSubscriptionID string    `json:"stripe_subscription_id,omitempty"`
 	SubStatus            string    `json:"sub_status"`
@@ -51,6 +57,15 @@ type User struct {
 	TrialEnd             time.Time `json:"trial_end,omitempty"` // set while trialing
 	CurrentPeriodEnd     time.Time `json:"current_period_end,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
+}
+
+// MockUserEntry is one name on the operator's mock allowlist (see
+// mockpay.go): when this username enrolls, the server activates it
+// without any payment, on any instance, Stripe configured or not.
+type MockUserEntry struct {
+	Username string    `json:"username"`
+	Note     string    `json:"note,omitempty"` // operator note: who/why
+	AddedAt  time.Time `json:"added_at"`
 }
 
 // Enrollment is a registration in progress/completed. The enrollment ID is
@@ -68,8 +83,9 @@ type Enrollment struct {
 }
 
 type storeData struct {
-	Users       map[string]*User       `json:"users"`
-	Enrollments map[string]*Enrollment `json:"enrollments"`
+	Users       map[string]*User          `json:"users"`
+	Enrollments map[string]*Enrollment    `json:"enrollments"`
+	MockUsers   map[string]*MockUserEntry `json:"mock_users,omitempty"`
 }
 
 // Store is the tunneld persistence layer.
@@ -95,6 +111,7 @@ func OpenStore(path string) (*Store, error) {
 	s := &Store{path: path}
 	s.data.Users = map[string]*User{}
 	s.data.Enrollments = map[string]*Enrollment{}
+	s.data.MockUsers = map[string]*MockUserEntry{}
 	raw, err := os.ReadFile(path)
 	switch {
 	case err == nil:
@@ -107,6 +124,9 @@ func OpenStore(path string) (*Store, error) {
 			}
 			if s.data.Enrollments == nil {
 				s.data.Enrollments = map[string]*Enrollment{}
+			}
+			if s.data.MockUsers == nil {
+				s.data.MockUsers = map[string]*MockUserEntry{}
 			}
 		}
 	case errors.Is(err, os.ErrNotExist):
@@ -262,6 +282,63 @@ func (s *Store) ListUsers() []User {
 	for _, u := range s.data.Users {
 		out = append(out, *u)
 	}
+	return out
+}
+
+// IsMockUser reports whether username is on the operator's mock
+// allowlist: its enrollment will be activated without payment.
+func (s *Store) IsMockUser(username string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.data.MockUsers[username]
+	return ok
+}
+
+// AddMockUser puts username on the mock allowlist (or refreshes its
+// note). added_at is preserved across refreshes.
+func (s *Store) AddMockUser(username, note string) (MockUserEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e, ok := s.data.MockUsers[username]; ok {
+		e.Note = note
+		if err := s.saveLocked(); err != nil {
+			return MockUserEntry{}, err
+		}
+		return *e, nil
+	}
+	e := &MockUserEntry{Username: username, Note: note, AddedAt: time.Now().UTC()}
+	s.data.MockUsers[username] = e
+	if err := s.saveLocked(); err != nil {
+		return MockUserEntry{}, err
+	}
+	return *e, nil
+}
+
+// RemoveMockUser takes username off the mock allowlist. It does NOT
+// touch an already-activated account — cancel that via the
+// subscription-event hook or a future admin action.
+func (s *Store) RemoveMockUser(username string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.data.MockUsers[username]; !ok {
+		return false, nil
+	}
+	delete(s.data.MockUsers, username)
+	if err := s.saveLocked(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ListMockUsers returns the mock allowlist, sorted by username.
+func (s *Store) ListMockUsers() []MockUserEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]MockUserEntry, 0, len(s.data.MockUsers))
+	for _, e := range s.data.MockUsers {
+		out = append(out, *e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
 	return out
 }
 
