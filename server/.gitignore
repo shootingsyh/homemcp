@@ -1,0 +1,9 @@
+.env
+.env.mock
+*.key
+*.pem
+*.p12
+# tunneld runtime state: token hashes + Stripe IDs — never commit.
+tunneld.json
+tunneld.json.tmp*
+.tunneld-*.tmp

@@ -1,0 +1,22 @@
+[Unit]
+Description=HomeMCP tunneld (control plane: frp plugin, registration API, Stripe webhooks)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tunneld
+Group=tunneld
+EnvironmentFile=/etc/tunneld/env
+ExecStart=/usr/local/bin/tunneld
+WorkingDirectory=/var/lib/tunneld
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+# tunneld listens on 127.0.0.1:7200 by default. frps reaches the plugin
+# over loopback; the public API/webhook ingress is a separate operator
+# reverse proxy for api.homemcp.si only.
+
+[Install]
+WantedBy=multi-user.target

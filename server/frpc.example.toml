@@ -1,0 +1,34 @@
+# Per-user frpc config — run on the HomeMCP user's machine, not on the
+# server. In production the HomeMCP client builds this from the
+# credentials it claims after checkout (see docs/CLIENT_CONTRACT.md);
+# this file is the human-readable reference for that shape.
+serverAddr = "tunnel.homemcp.si"
+serverPort = 7000
+
+# Your username. frps prefixes your proxies with it, and the tunneld
+# plugin binds it to your credential and your hostname.
+user = "YOUR_USERNAME"
+
+auth.method = "token"
+# Shared bootstrap token: verified by frps itself. The HomeMCP app ships
+# this embedded; it is the same for every subscriber and is NOT your
+# personal credential.
+auth.token = "BOOTSTRAP_TOKEN_EMBEDDED_IN_HOMEMCP_APP"
+
+# Your personal per-user token, issued once by the claim API. The plugin
+# checks it on Login and on every proxy registration. Only its SHA-256
+# hash exists on the server — if you lose it, it cannot be shown again.
+metadatas.token = "YOUR_PER_USER_TOKEN"
+
+transport.tls.enable = true
+
+[[proxies]]
+name = "homemcp"
+type = "https"
+# Must be exactly your own subdomain — the plugin rejects anything else.
+customDomains = ["YOUR_USERNAME.tunnel.homemcp.si"]
+localIP = "127.0.0.1"
+localPort = 8443
+# Local port MUST speak HTTPS and present a publicly trusted certificate
+# for YOUR_USERNAME.tunnel.homemcp.si. TLS terminates here, on your
+# machine — the relay never decrypts it.
