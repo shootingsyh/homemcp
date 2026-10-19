@@ -87,6 +87,7 @@ cat > /etc/caddy/Caddyfile <<EOF
 	auto_https off
 }
 $API_HOST:$CADDY_PORT {
+	bind 127.0.0.1
 	tls /etc/caddy/api.crt /etc/caddy/api.key
 	@api path /api/* /webhooks/*
 	handle @api {
