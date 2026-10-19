@@ -283,11 +283,20 @@ tunneld is a single Go binary; each runs under its own systemd unit
    `tunneld healthcheck`.
 4. DNS (DNS-only): A records for `tunnel.homemcp.si`,
    `*.tunnel.homemcp.si`, and `api.homemcp.si` to the host IP.
-5. API ingress: point `api.homemcp.si` at an operator reverse proxy
-   on the host (e.g. Caddy) that forwards only `/api/*` and
-   `/webhooks/*` to tunneld on `127.0.0.1:7200`. This proxy
-   terminates TLS **only for the operator's own API hostname** —
-   never for `*.tunnel.homemcp.si`, which stays frps passthrough.
+5. API ingress: frps owns the public 443, so the API hostname gets
+   its public entry *through frps itself*: an operator frpc account
+   (`api-ingress`, a reserved username the plugin confines to exactly
+   the API hostname) registers an https proxy for `api.homemcp.si`
+   down to a local Caddy on `127.0.0.1:8444`, which terminates TLS
+   **only for the operator's own API hostname** and forwards just
+   `/api/*` and `/webhooks/*` to tunneld on `127.0.0.1:7200`
+   (everything else, including `/plugin/frp`, is 404). Tenant
+   domains stay pure passthrough. Run
+   `sudo ./deploy/setup-api-ingress.sh` after `install.sh` (it seeds
+   the ingress user, installs Caddy + both units, and drops a
+   placeholder cert — swap in the real Let's Encrypt cert for the
+   API host, obtainable via the same Cloudflare DNS-01 API token,
+   and reload Caddy).
 6. Stripe dashboard: create the two prices ($9.99/year, $0.99/month),
    put their IDs + the secret key in `.env`, and register the webhook
    endpoint `https://api.homemcp.si/webhooks/stripe` for
