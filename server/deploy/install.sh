@@ -20,6 +20,11 @@
 #   SKIP_FIREWALL=1 do not touch iptables.
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "run as root" >&2; exit 1; }
+# The working directory the operator invoked us from: .env and the
+# tunneld/ source dir live there. Section [1] cds to /tmp for the
+# frp tarball, so capture this first (an earlier version lost .env
+# that way and silently installed tunneld unconfigured).
+START_DIR="$PWD"
 export DEBIAN_FRONTEND=noninteractive
 FRP_VERSION="${FRP_VERSION:-v0.68.0}"
 PHASE1="${PHASE1:-0}"
@@ -41,8 +46,8 @@ frps --version
 
 echo "== [2] frps config + unit =="
 mkdir -p /etc/frp
-if [[ -f .env ]]; then set -a; # shellcheck disable=SC1091
-  source .env; set +a; fi
+if [[ -f "$START_DIR/.env" ]]; then set -a; # shellcheck disable=SC1091
+  source "$START_DIR/.env"; set +a; fi
 : "${FRP_TOKEN:?Set FRP_TOKEN (env or .env): openssl rand -hex 32}"
 {
   echo "# HomeMCP tunnel relay (multi-tenant, zero-knowledge)."
@@ -91,7 +96,7 @@ if [[ "$PHASE1" != "1" ]]; then
   echo "== [3] tunneld =="
   if [[ -n "${TUNNELD_BIN:-}" ]]; then
     install -m 755 "$TUNNELD_BIN" /usr/local/bin/tunneld
-  elif [[ -d tunneld ]]; then
+  elif [[ -d "$START_DIR/tunneld" ]]; then
     if ! command -v go >/dev/null 2>&1; then
       echo "Go not found — installing toolchain to /usr/local/go"
       GO_VER=1.23.4
@@ -99,7 +104,7 @@ if [[ "$PHASE1" != "1" ]]; then
       curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-${GO_ARCH}.tar.gz" | tar -C /usr/local -xz
       export PATH="$PATH:/usr/local/go/bin"
     fi
-    (cd tunneld && go build -trimpath -o /usr/local/bin/tunneld .)
+    (cd "$START_DIR/tunneld" && go build -trimpath -o /usr/local/bin/tunneld .)
   else
     echo "No tunneld source (./tunneld) and no TUNNELD_BIN — cannot install tunneld." >&2
     echo "Run from a repo checkout, or pass TUNNELD_BIN=/path/to/tunneld." >&2
@@ -108,9 +113,9 @@ if [[ "$PHASE1" != "1" ]]; then
   id tunneld >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin tunneld
   mkdir -p /var/lib/tunneld /etc/tunneld
   chown tunneld:tunneld /var/lib/tunneld
-  if [[ -f .env ]]; then
+  if [[ -f "$START_DIR/.env" ]]; then
     # systemd EnvironmentFile: plain KEY=VALUE lines only.
-    grep -E '^[A-Z_]+=' .env > /etc/tunneld/env || true
+    grep -E '^[A-Z_]+=' "$START_DIR/.env" > /etc/tunneld/env || true
   fi
   [[ -f /etc/tunneld/env ]] || touch /etc/tunneld/env
   grep -q '^TUNNELD_STORE_PATH=' /etc/tunneld/env || echo 'TUNNELD_STORE_PATH=/var/lib/tunneld/tunneld.json' >> /etc/tunneld/env
@@ -151,11 +156,15 @@ fi
 echo "== [5] start services =="
 systemctl daemon-reload
 if [[ "$PHASE1" != "1" ]]; then
-  systemctl enable --now homemcp-tunneld
+  # restart (not enable --now): on upgrades the service is already
+  # running with the old binary/config and must pick up the new ones.
+  systemctl enable homemcp-tunneld
+  systemctl restart homemcp-tunneld
   sleep 2
   TUNNELD_LISTEN=127.0.0.1:7200 /usr/local/bin/tunneld healthcheck || { journalctl -u homemcp-tunneld --no-pager -n 30; exit 1; }
 fi
-systemctl enable --now homemcp-frps
+systemctl enable homemcp-frps
+systemctl restart homemcp-frps
 sleep 2
 systemctl is-active homemcp-frps
 ss -lntp | grep -E ':(7000|443)\b'
