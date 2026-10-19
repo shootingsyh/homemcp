@@ -118,6 +118,100 @@ and tested before a real Stripe account exists:
 > for client development, and double-check `TUNNELD_MOCK_PAY` is unset
 > (or `0`) before any public deployment.
 
+## Standalone mock instance (for client development)
+
+`docker-compose.mock.yml` + `.env.mock.example` package the mock
+mode above as a ready-to-run, single-container instance the client
+developer can point the HomeMCP client at while building the
+registration flow — no Oracle host, no Stripe account, no real
+payment. It runs **tunneld only**: frps is deliberately absent,
+because the enrollment → pay → claim → account flow never touches
+the tunnel data plane. (The frpc config handed out at claim time
+still names the production frps address; the dev flow validates
+everything up to claim + account state, it just does not open a
+real tunnel.)
+
+Start it on any Docker host:
+
+```bash
+cp .env.mock.example .env.mock
+# Edit .env.mock: set API_PUBLIC_BASE to the address the client dev
+# machine will reach this host at (LAN IP or DNS name, port must
+# match MOCK_PORT), and set TUNNELD_ADMIN_KEY
+# (openssl rand -hex 32 — compose refuses to start without it).
+docker compose -f docker-compose.mock.yml --env-file .env.mock up -d --build
+docker compose -f docker-compose.mock.yml --env-file .env.mock ps   # tunneld healthy
+```
+
+What the client dev gets:
+
+- **One base URL for everything.** The client uses `API_PUBLIC_BASE`
+  (from `.env.mock`) as its API base. Enrollments created there
+  return `checkout_url = <that same base>/mock-pay/<enrollment_id>`:
+  API and mock checkout pages are the same tunneld on the same
+  origin, exactly like production, where the checkout URL is on
+  Stripe's origin instead.
+- **Production-shaped API.** `POST /api/v1/enrollments`,
+  `GET /api/v1/enrollments/<id>` (poll → claim, credentials issued
+  exactly once), `GET /api/v1/account`, and `POST
+  /api/v1/account/portal` are the same endpoints with the same
+  payloads as production (see `docs/CLIENT_CONTRACT.md`). On a mock
+  instance the portal call answers `503 stripe_not_configured` —
+  there is no Stripe customer behind a mock user — and subscription
+  lifecycle is driven by the test hook instead.
+- **The admin subscription-event hook.** With the `X-Admin-Key`
+  header (value = `TUNNELD_ADMIN_KEY` from `.env.mock`),
+  `POST /api/v1/mock/users/<username>/subscription-event` with
+  `{"event": …}` simulates `invoice.paid`, `invoice.payment_failed`
+  (past_due + 3-day grace), `subscription.deleted`, and `trial.end`,
+  so the client can be exercised through every subscription state
+  without waiting for real billing time to pass.
+
+Smoke test (from any shell that can reach the instance):
+
+```bash
+BASE=http://192.168.1.50:7200   # = API_PUBLIC_BASE from .env.mock
+
+# 1. Create an enrollment (annual -> starts as a 7-day trial).
+curl -s -X POST "$BASE/api/v1/enrollments" \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"devtester","plan":"annual"}'
+# -> {"enrollment_id":"…","checkout_url":"http://192.168.1.50:7200/mock-pay/…","status":"pending_payment"}
+
+# 2. "Pay": open the checkout_url in a browser and click
+#    Pay (mock) — or POST it directly (no body needed):
+curl -s -X POST "<checkout_url from step 1>" >/dev/null
+
+# 3. Poll the enrollment. While unpaid it reports
+#    "pending_payment"; the first poll after payment is the claim —
+#    status flips to "claimed" and that response carries
+#    credentials{username, token, subdomain, frpc_config}, shown
+#    exactly once:
+curl -s "$BASE/api/v1/enrollments/<enrollment_id>"
+
+# 4. Account state with the claimed token:
+curl -s "$BASE/api/v1/account" -H "Authorization: Bearer <token from step 3>"
+# -> sub_status "trialing" (annual) with trial_end ~7 days out.
+
+# 5. Drive lifecycle states with the admin hook:
+curl -s -X POST "$BASE/api/v1/mock/users/devtester/subscription-event" \
+  -H "X-Admin-Key: <TUNNELD_ADMIN_KEY from .env.mock>" \
+  -H 'Content-Type: application/json' \
+  -d '{"event":"invoice.payment_failed"}'   # -> past_due + 3-day grace
+```
+
+Stop it with `docker compose -f docker-compose.mock.yml
+--env-file .env.mock down` (add `-v` to also wipe the mock user
+store and start clean).
+
+> **⚠ Same warning as above, at the deployment level:** this profile
+> exists so a client developer can self-serve test accounts — which
+> is precisely why it must never be reachable as the production API.
+> This same profile is what will be deployed **for dev** on the
+> Oracle host once it exists (client testing against a realistic
+> host), as a separate deployment next to — never instead of — the
+> production relay from `docker-compose.yml`.
+
 ## Phase 1 (owner-only) can run frps alone
 
 Before tunneld/Stripe are live, the relay works as a single-tenant
