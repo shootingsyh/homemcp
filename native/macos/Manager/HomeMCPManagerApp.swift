@@ -89,7 +89,19 @@ struct SetupView: View {
                 .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(24)
-        .onAppear { checkWizard(advance: false) }
+        .onAppear {
+            if ProcessInfo.processInfo.environment["HOMEMCP_UI_SMOKE"] == "1" {
+                // Exercise the actual SwiftUI WindowGroup/view layout without real tunnel,
+                // Keychain, browser or network activity.
+                let marker = ProcessInfo.processInfo.environment["HOMEMCP_UI_SMOKE_MARKER"] ?? ""
+                if !marker.isEmpty {
+                    try? "HOMEMCP_UI_READY".write(toFile: marker, atomically: true, encoding: .utf8)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { NSApp.terminate(nil) }
+            } else {
+                checkWizard(advance: false)
+            }
+        }
     }
 
     private var dashboard: some View {
