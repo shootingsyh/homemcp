@@ -93,9 +93,12 @@ struct SetupView: View {
             if ProcessInfo.processInfo.environment["HOMEMCP_UI_SMOKE"] == "1" {
                 // Exercise the actual SwiftUI WindowGroup/view layout without real tunnel,
                 // Keychain, browser or network activity.
+                let state = ProcessInfo.processInfo.environment["HOMEMCP_UI_SMOKE_PAGE"] ?? "connection"
+                completed = state == "dashboard"
+                step = state == "tunnel" ? 1 : (state == "passkey" ? 2 : 0)
                 let marker = ProcessInfo.processInfo.environment["HOMEMCP_UI_SMOKE_MARKER"] ?? ""
                 if !marker.isEmpty {
-                    try? "HOMEMCP_UI_READY".write(toFile: marker, atomically: true, encoding: .utf8)
+                    try? ("HOMEMCP_UI_READY:" + state).write(toFile: marker, atomically: true, encoding: .utf8)
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { NSApp.terminate(nil) }
             } else {
