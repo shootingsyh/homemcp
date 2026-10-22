@@ -28,19 +28,26 @@ const pkg = require('./node_modules/@playwright/mcp/package.json');
 const entry = typeof pkg.bin === 'string' ? pkg.bin : Object.values(pkg.bin)[0];
 await import(new URL(entry, new URL('./node_modules/@playwright/mcp/', import.meta.url)));
 '@ | Set-Content "$payload\workers\playwright\cli.mjs" -Encoding UTF8
+# Install the official CPython embeddable runtime, not a PyInstaller executable.
+# The desktop worker uses a dedicated interpreter and fixed Python dependencies.
 & py -3.14 --version
-if ($LASTEXITCODE -ne 0) { throw 'Python 3.14 is required on BUILD runner' }
-& py -3.14 -m venv "$root\build\py-build"
-$py = "$root\build\py-build\Scripts\python.exe"
-& $py -m pip install --disable-pip-version-check 'windows-mcp==0.8.8' 'pyinstaller>=6.16,<7'
-if ($LASTEXITCODE -ne 0) { throw 'Python build dependencies failed' }
-@'
-from windows_mcp.__main__ import main
-if __name__ == "__main__":
-    main()
-'@ | Set-Content "$root\build\windows_mcp_entry.py" -Encoding UTF8
-& $py -m PyInstaller --noconfirm --clean --onefile --name windows-mcp --collect-all windows_mcp --distpath "$payload\workers" --workpath "$root\build\pyinstaller-work" --specpath "$root\build" "$root\build\windows_mcp_entry.py"
-if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP PyInstaller failed' }
+if ($LASTEXITCODE -ne 0) { throw 'Python 3.14 required on BUILD runner' }
+$worker=Join-Path $payload 'workers\windows-mcp'
+New-Item -ItemType Directory -Force $worker | Out-Null
+$pythonVersion='3.14.2'
+$pythonZip=Join-Path $root 'build\python-embed.zip'
+Invoke-WebRequest "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip" -OutFile $pythonZip
+Expand-Archive $pythonZip -DestinationPath $worker -Force
+# Python embeddable _pth deliberately disables user/global PYTHONPATH.
+# Only bundled wheels and the standard library are visible to the worker.
+$pth=Get-ChildItem $worker -Filter 'python*._pth' | Select-Object -First 1
+if (-not $pth) { throw 'Python embedded ._pth file missing' }
+Set-Content -LiteralPath $pth.FullName -Encoding ASCII -Value @('python314.zip','.','site-packages','import site')
+New-Item -ItemType Directory -Force (Join-Path $worker 'site-packages') | Out-Null
+& py -3.14 -m pip install --disable-pip-version-check --no-compile --target (Join-Path $worker 'site-packages') 'windows-mcp==0.8.8'
+if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP wheel install failed' }
+& (Join-Path $worker 'python.exe') -c "import windows_mcp; print('BUNDLED_WINDOWS_MCP_OK')"
+if ($LASTEXITCODE -ne 0) { throw 'Embedded Python smoke test failed' }
 dotnet publish "$root\native\Manager\Manager.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$root\build\manager"
 if ($LASTEXITCODE -ne 0) { throw 'Manager publish failed' }
 Copy-Item "$root\build\manager\HomeMCP.Manager.exe" "$payload\runtime\HomeMCP.Manager.exe" -Force
