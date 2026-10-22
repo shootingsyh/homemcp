@@ -34,6 +34,10 @@ export class PasskeyManager{
    if(!changed)return false;
   }
   this.db.prepare('INSERT INTO passkeys(id,public_key,counter,transports,created_at) VALUES(?,?,?,?,?)').run(credential.id,b64(credential.publicKey),credential.counter,JSON.stringify(credential.transports||[]),Date.now());return true}
+ list(){return this.db.prepare('SELECT id,created_at FROM passkeys ORDER BY created_at ASC').all().map(x=>({id:x.id,created_at:x.created_at}));}
+ async managementOptions(action,id=''){if(!this.registered())throw Error('no_passkeys');const {generateAuthenticationOptions}=await this.sdk();const options=await generateAuthenticationOptions({rpID:this.rpID,userVerification:'required',allowCredentials:this.db.prepare('SELECT id,transports FROM passkeys').all().map(x=>({id:x.id,transports:JSON.parse(x.transports||'[]')}))});return {challengeId:this.storeChallenge('manage:'+action+':'+id,options.challenge),options};}
+ async verifyManagement(challengeId,response,action,id=''){const expectedChallenge=this.consumeChallenge(challengeId,'manage:'+action+':'+id);if(!expectedChallenge||!response?.id)return false;const row=this.db.prepare('SELECT * FROM passkeys WHERE id=?').get(response.id);if(!row)return false;const {verifyAuthenticationResponse}=await this.sdk();const result=await verifyAuthenticationResponse({response,expectedChallenge,expectedOrigin:this.origin,expectedRPID:this.rpID,requireUserVerification:true,credential:{id:row.id,publicKey:unb64(row.public_key),counter:row.counter,transports:JSON.parse(row.transports||'[]')}});if(!result.verified)return false;this.db.prepare('UPDATE passkeys SET counter=? WHERE id=?').run(result.authenticationInfo.newCounter,row.id);return true;}
+ remove(id){if(this.db.prepare('SELECT COUNT(*) AS n FROM passkeys').get().n<=1)throw Error('cannot_remove_last_passkey');const result=this.db.prepare('DELETE FROM passkeys WHERE id=?').run(id);return result.changes===1;}
  async decisionOptions(approvalId,decision){
   if(!['approve','reject'].includes(decision)||!this.registered())throw new Error('invalid_decision');
   const {generateAuthenticationOptions}=await this.sdk();

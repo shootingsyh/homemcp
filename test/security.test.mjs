@@ -41,3 +41,20 @@ test('restart preserves pending and treats in-flight as unknown',()=>{
  assert.equal(db.get(a.id).status,'outcome_unknown');assert.equal(db.claim(a.id,a.arguments_hash),null);
  cleanup(db,dir);
 });
+test('automatic approval dispatch and manual resume race: only one claim wins',async()=>{
+ const dir=temp(),db=new ApprovalStore(dir);
+ try{
+  const item=db.create('file_delete',{path:'synthetic-only'},'Synthetic test');
+  assert.equal(db.claim(item.id,item.arguments_hash),null);
+  assert.equal(db.complete(item.id,'approved'),'approved');
+  const first=db.claim(item.id,item.arguments_hash);
+  const second=db.claim(item.id,item.arguments_hash);
+  assert.ok(first);
+  assert.equal(second,null);
+  assert.equal(db.complete(item.id,'approved'),false);
+  assert.equal(db.claim(item.id,'tampered'),null);
+  assert.equal(db.finish(item.id,{deleted:true}),true);
+  assert.equal(db.claim(item.id,item.arguments_hash),null);
+  assert.equal(db.result(item.id).status,'completed');
+ }finally{cleanup(db,dir)}
+});

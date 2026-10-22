@@ -1,3 +1,4 @@
+import {StdioMcpClient} from './stdio-mcp.mjs';
 import {launchWorker,stopWorker} from './process-lifecycle.mjs';
 import { spawn, execFile } from 'node:child_process';
 import net from 'node:net';
@@ -49,6 +50,15 @@ export class McpClient {
 export async function freeLocalPort(){return new Promise((resolve,reject)=>{const s=net.createServer();s.once('error',reject);s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(e=>e?reject(e):resolve(p))})});}
 async function isPortOpen(url,timeout=350){const u=new URL(url);return new Promise(resolve=>{const s=net.createConnection({host:u.hostname,port:Number(u.port)});let doneFlag=false;const done=x=>{if(doneFlag)return;doneFlag=true;s.destroy();resolve(x)};s.setTimeout(timeout);s.once('connect',()=>done(true));s.once('error',()=>done(false));s.once('timeout',()=>done(false))})}
 export async function ownsListener(port,rootPid){
+ if(process.platform==='darwin'){
+  // Verify the LISTEN socket belongs to the exact worker we spawned.
+  // Never trust a foreign process merely because its port is reachable.
+  if(!Number.isInteger(rootPid)||rootPid<=0)return false;
+  try {
+   const {stdout}=await execFileAsync('/usr/sbin/lsof',['-nP','-a','-p',String(rootPid),'-iTCP:'+port,'-sTCP:LISTEN','-t'],{timeout:3000,maxBuffer:8192});
+   return stdout.trim().split(/\s+/).includes(String(rootPid));
+  }catch{return false}
+ }
  if(process.platform!=='win32')return true;
  if(!Number.isInteger(rootPid)||rootPid<=0)return false;
  // Fast path for a directly spawned server, avoiding PowerShell cold-start latency.
@@ -71,7 +81,24 @@ export async function ownsListener(port,rootPid){
 function setPort(spec,port){const url=new URL(spec.url);url.port=String(port);spec.url=url.toString();const i=(spec.args||[]).findIndex(v=>v==='--port');if(i<0||i===spec.args.length-1)throw new Error('worker_missing_port_argument');spec.args[i+1]=String(port)}
 export class Worker {
  constructor(spec,log,onPortChange=async()=>{}){this.spec=spec;this.log=log;this.onPortChange=onPortChange;this.child=null;this.client=null;this.pending=null;this.tools=[];this.status='stopped';this.failures=0;this.retryAfter=0;this.stopping=false;this.owned=false}
- async ensure(){if(this.pending)return this.pending;if(this.child&&this.child.exitCode===null&&this.client&&this.status==='ready'&&this.owned)return this.client;if(Date.now()<this.retryAfter)throw new Error(`worker_${this.spec.name}_backoff`);this.pending=this._ensure().finally(()=>{this.pending=null});return this.pending}
+ async ensure(){if(this.spec.transport==='stdio')return this.ensureStdio();if(this.pending)return this.pending;if(this.child&&this.child.exitCode===null&&this.client&&this.status==='ready'&&this.owned)return this.client;if(Date.now()<this.retryAfter)throw new Error(`worker_${this.spec.name}_backoff`);this.pending=this._ensure().finally(()=>{this.pending=null});return this.pending}
+ async ensureStdio(){
+  if(this.pending)return this.pending;
+  if(this.client&&this.status==='ready'&&this.client.child?.exitCode===null)return this.client;
+  if(Date.now()<this.retryAfter)throw Error('stdio_worker_backoff');
+  this.pending=(async()=>{
+   this.status='starting';
+   try{
+    const client=new StdioMcpClient(this.spec);
+    await client.connect();this.client=client;this.child=client.child;this.owned=true;
+    const tools=await client.list();this.tools=tools;this.status='ready';this.failures=0;
+    client.on('unavailable',()=>{this.status='stopped';this.owned=false;this.client=null;this.child=null});
+    this.log.write('info','stdio_worker_ready',{worker:this.spec.name,count:tools.length});
+    return client;
+   }catch(e){this.status='failed';this.client=null;this.child=null;this.owned=false;this.failures++;this.retryAfter=Date.now()+1000;throw e}
+  })().finally(()=>{this.pending=null});
+  return this.pending;
+ }
  async _ensure(){this.status='starting';try{
  if(this.child&&(this.child.exitCode!==null||this.child.signalCode!==null))this.child=null;
  if(!this.child){
@@ -96,6 +123,7 @@ export class Worker {
  throw new Error(`mcp_not_ready: ${lastError?.message||'timeout'}`);
  }catch(e){this.status='failed';this.client=null;this.owned=false;this.failures++;this.retryAfter=Date.now()+Math.min(60000,1000*2**Math.min(this.failures,6));this.log.write('error','worker_start_failed',{worker:this.spec.name,message:e.message,backoffMs:this.retryAfter-Date.now()});await this.stop();throw e}}
  async call(name,args){
+  if(this.spec.transport==='stdio')return (await this.ensure()).call(name,args);
   let c=await this.ensure();
   // Validate the upstream session before sending a potentially non-idempotent tool call.
   if(c.session){
@@ -108,8 +136,8 @@ export class Worker {
    }
   }
   try{return await c.request('tools/call',{name,arguments:args||{}})}catch(e){if(e.message.includes('upstream_session_lost')){this.client=null;this.owned=false;this.status='stopped';this.log.write('warn','session_lost',{worker:this.spec.name})}throw e}}
- async list(){const c=await this.ensure();const result=await c.request('tools/list',{});this.tools=result.tools||[];return this.tools}
- async stop(){this.client=null;this.owned=false;const child=this.child;if(!child){this.status='stopped';return}this.stopping=true;this.status='stopping';
+ async list(){if(this.spec.transport==='stdio')return (await this.ensure()).list();const c=await this.ensure();const result=await c.request('tools/list',{});this.tools=result.tools||[];return this.tools}
+ async stop(){if(this.spec.transport==='stdio'){const client=this.client;this.client=null;this.child=null;this.owned=false;this.status='stopped';await client?.stop();return;}this.client=null;this.owned=false;const child=this.child;if(!child){this.status='stopped';return}this.stopping=true;this.status='stopping';
  await stopWorker(child)
  if(this.child===child)this.child=null;this.stopping=false;this.status='stopped'}
 }
