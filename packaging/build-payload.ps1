@@ -46,6 +46,15 @@ Set-Content -LiteralPath $pth.FullName -Encoding ASCII -Value @('python314.zip',
 New-Item -ItemType Directory -Force (Join-Path $worker 'site-packages') | Out-Null
 & py -3.14 -m pip install --disable-pip-version-check --no-compile --target (Join-Path $worker 'site-packages') 'windows-mcp==0.8.8'
 if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP wheel install failed' }
+# pywin32's wheel expects its custom site initialization, which the embedded
+# interpreter does not run. Expose win32 modules and required native DLLs.
+Add-Content -LiteralPath $pth.FullName -Encoding ASCII -Value @('site-packages\\win32','site-packages\\win32\\lib','site-packages\\Pythonwin')
+foreach ($name in @('pywintypes314.dll','pythoncom314.dll')) {
+  $src = Join-Path $worker "site-packages\\pywin32_system32\\$name"
+  if (-not (Test-Path $src)) { throw "Windows-MCP pywin32 runtime missing $name" }
+  Copy-Item $src (Join-Path $worker $name) -Force
+}
+
 & (Join-Path $worker 'python.exe') -c "import windows_mcp; print('BUNDLED_WINDOWS_MCP_OK')"
 if ($LASTEXITCODE -ne 0) { throw 'Embedded Python smoke test failed' }
 dotnet publish "$root\native\Manager\Manager.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$root\build\manager"
