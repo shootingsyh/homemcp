@@ -25,7 +25,7 @@ $config=@{
  egress=@{enabled=$false;mode='disabled'}
  workers=@(
   @{name='browser';command=(Join-Path $AppDir 'runtime\node.exe');args=@((Join-Path $AppDir 'workers\playwright\cli.mjs'),'--browser','msedge','--user-data-dir',(Join-Path $dataDir 'EdgeProfile'),'--shared-browser-context','--host','127.0.0.1','--port',([string]$browserPort));url="http://127.0.0.1:$browserPort/mcp";startupMs=35000},
-  @{name='desktop';command=(Join-Path $AppDir 'workers\windows-mcp.exe');args=@('serve','--transport','streamable-http','--host','127.0.0.1','--port',([string]$desktopPort),'--tools','Screenshot,Snapshot,Click,Type,Scroll,Move,Shortcut,Wait,WaitFor,App,PowerShell');url="http://127.0.0.1:$desktopPort/mcp";startupMs=35000}
+  @{name='desktop';command=(Join-Path $AppDir 'workers\windows-mcp\python.exe');args=@('-m','windows_mcp','serve','--transport','streamable-http','--host','127.0.0.1','--port',([string]$desktopPort),'--tools','Screenshot,Snapshot,Click,Type,Scroll,Move,Shortcut,Wait,WaitFor,App,PowerShell');url="http://127.0.0.1:$desktopPort/mcp";startupMs=35000}
  )
  tools=@{
   browser_navigate=@{worker='browser';upstream='browser_navigate';description='Browser navigate';inputSchema=@{type='object';properties=@{url=@{type='string'}};required=@('url')}}
