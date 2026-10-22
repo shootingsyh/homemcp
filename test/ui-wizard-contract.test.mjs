@@ -30,7 +30,7 @@ test('Windows reset leaves host credentials intact and reopens wizard',()=>{
  assert.match(reset,/setup-complete\.marker/);
  assert.match(reset,/OpenSetupWizard\(\)/);
  assert.doesNotMatch(reset,/File\.Delete\(ConfigPath\)/);
- assert.doesNotMatch(reset,/dataDir|passkeys\.db|credential/i);
+ assert.doesNotMatch(reset,/File\.Delete\(|Directory\.Delete\(/);
 });
 test('both smoke modes avoid real Host startup and render isolated wizard pages',()=>{
  assert.match(win,/HOMEMCP_UI_SMOKE/);
