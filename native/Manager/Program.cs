@@ -74,6 +74,10 @@ sealed class TrayContext : ApplicationContext {
      if(!controls.OfType<Button>().Any(x=>x.Text=="Continue"))throw new Exception("wizard_continue_missing");
      if(!controls.OfType<Label>().Any(x=>x.Text.Contains("Choose connection")))throw new Exception("wizard_first_page_missing");
      if(controls.OfType<Button>().Any(x=>x.Text.Contains("Passkey")||x.Text.Contains("Finish")))throw new Exception("wizard_future_steps_leaked");
+     controls.OfType<Button>().First(x=>x.Text=="Continue").PerformClick();
+     controls.Clear();Collect(settings);
+     if(!controls.OfType<Label>().Any(x=>x.Text.Contains("Verify your tunnel")))throw new Exception("wizard_step_two_missing");
+     if(controls.OfType<Button>().Any(x=>x.Text.Contains("Passkey")))throw new Exception("wizard_passkey_visible_too_early");
      var marker=Environment.GetEnvironmentVariable("HOMEMCP_UI_SMOKE_MARKER");
      if(!String.IsNullOrEmpty(marker))File.WriteAllText(marker,"HOMEMCP_UI_READY");
     }catch(Exception e){Environment.ExitCode=1;Console.Error.WriteLine(e);}
@@ -540,6 +544,7 @@ sealed class TrayContext : ApplicationContext {
    SetBusy(true);
    try{
     if(step==0){
+     if(Environment.GetEnvironmentVariable("HOMEMCP_UI_SMOKE")=="1"){step=1;ShowStep();return;}
      if(!Running)Start();
      if(choice=="managed" && !File.Exists(ConfigPath))throw new Exception("Managed enrollment is not configured on this computer.");
      step=1;ShowStep();
