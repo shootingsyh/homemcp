@@ -25,6 +25,8 @@ struct SetupView: View {
     }
     private var nodePath: String {
         if let explicit = ProcessInfo.processInfo.environment["HOMEMCP_NODE_PATH"] { return explicit }
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/HomeMCP/runtime/node").path
+        if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
         for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
             if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
         }
