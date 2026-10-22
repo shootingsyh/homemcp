@@ -15,7 +15,9 @@ rm -rf "$RESOURCES"
 mkdir -p "$RESOURCES"
 # Developer package bundles source and locally installed dependencies only.
 # An independently signed production distribution must bundle a pinned Node runtime.
-cp -R "$ROOT/src" "$ROOT/scripts" "$ROOT/web" "$ROOT/native/macos" "$RESOURCES/"
+cp -R "$ROOT/src" "$ROOT/scripts" "$ROOT/web" "$RESOURCES/"
+mkdir -p "$RESOURCES/native"
+cp -R "$ROOT/native/macos" "$RESOURCES/native/"
 cp "$ROOT/package.json" "$ROOT/package-lock.json" "$RESOURCES/"
 # Pin the runtime used by CI so the GUI cannot select an obsolete system Node.
 NODE_BIN=$(command -v node)
