@@ -49,27 +49,31 @@ jobs:
         run: sh scripts/macos/smoke-host.sh
       - name: Build SwiftUI Manager
         run: sh scripts/macos/build-manager.sh
-      - name: Smoke-test real SwiftUI Manager launch (mock mode)
+      - name: Smoke-test all SwiftUI setup pages (mock mode)
         run: |
           set -eu
           export HOMEMCP_UI_SMOKE=1
-          export HOMEMCP_UI_SMOKE_MARKER="$RUNNER_TEMP/homemcp-mac-ui-ready"
           GUI="build/macos-manager/HomeMCP Manager.app/Contents/MacOS/HomeMCP.Manager"
-          "$GUI" > "$RUNNER_TEMP/homemcp-mac-ui.log" 2>&1 &
-          PID=$!
-          ready=0
-          for i in $(seq 1 30); do
-            if [ -f "$HOMEMCP_UI_SMOKE_MARKER" ]; then ready=1; break; fi
-            sleep 0.5
+          for page in connection tunnel passkey dashboard; do
+            export HOMEMCP_UI_SMOKE_PAGE="$page"
+            export HOMEMCP_UI_SMOKE_MARKER="$RUNNER_TEMP/homemcp-mac-ui-$page"
+            rm -f "$HOMEMCP_UI_SMOKE_MARKER"
+            "$GUI" > "$RUNNER_TEMP/homemcp-mac-ui-$page.log" 2>&1 &
+            PID=$!
+            ready=0
+            for i in $(seq 1 30); do
+              if [ -f "$HOMEMCP_UI_SMOKE_MARKER" ]; then ready=1; break; fi
+              sleep 0.5
+            done
+            if [ "$ready" != "1" ]; then
+              cat "$RUNNER_TEMP/homemcp-mac-ui-$page.log"
+              kill "$PID" 2>/dev/null || true
+              exit 1
+            fi
+            grep -q "HOMEMCP_UI_READY:$page" "$HOMEMCP_UI_SMOKE_MARKER"
+            wait "$PID" || true
+            echo "MACOS_SWIFTUI_PAGE_OK:$page"
           done
-          if [ "$ready" != "1" ]; then
-            cat "$RUNNER_TEMP/homemcp-mac-ui.log"
-            kill "$PID" 2>/dev/null || true
-            exit 1
-          fi
-          grep -q HOMEMCP_UI_READY "$HOMEMCP_UI_SMOKE_MARKER"
-          wait "$PID" || true
-          echo "MACOS_SWIFTUI_SMOKE_OK"
       - name: Build unsigned developer package
         run: sh scripts/macos/package.sh
       - name: Upload package to GitHub pre-release (not Actions Artifacts)
