@@ -4,3 +4,7 @@ config.json
 *.zip
 build/
 dist/
+
+vendor/frp/
+native/Manager/bin/
+native/Manager/obj/

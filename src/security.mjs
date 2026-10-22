@@ -14,6 +14,7 @@ export class ApprovalStore{
    if(!this.db.prepare('PRAGMA table_info(approvals)').all().some(x=>x.name===column))this.db.exec('ALTER TABLE approvals ADD COLUMN '+column+' '+type);
   }
   this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS approval_idempotency ON approvals(idempotency_key) WHERE idempotency_key IS NOT NULL');
+  this.db.exec('CREATE TABLE IF NOT EXISTS task_links (task_id TEXT PRIMARY KEY, approval_id TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, ttl INTEGER NOT NULL)');
   this.db.prepare("UPDATE approvals SET status='outcome_unknown' WHERE status='executing'").run();
   this.db.prepare("UPDATE approvals SET status='interrupted' WHERE status='pending' AND args_json IS NULL").run();
   this.timeoutMs=timeoutMs;this.limit=limit;
@@ -32,6 +33,13 @@ export class ApprovalStore{
   this.db.prepare('INSERT INTO approvals(id,created_at,expires_at,tool,args_sha,status,preview,args_json,idempotency_key) VALUES(?,?,?,?,?,?,?,?,?)').run(id,now,expires,tool,digest,'pending',preview,JSON.stringify(args),idempotencyKey);
   this.record('approval_requested',tool,id);return this.public(this.db.prepare('SELECT * FROM approvals WHERE id=?').get(id));
  }
+ linkTask(approvalId,ttl=3600000){
+  if(!validId(approvalId)||!this.get(approvalId))throw new Error('unknown_approval');
+  if(!Number.isSafeInteger(ttl)||ttl<60000||ttl>86400000)throw new Error('invalid_task_ttl');
+  const now=Date.now();this.db.prepare('INSERT OR IGNORE INTO task_links(task_id,approval_id,created_at,updated_at,ttl) VALUES(?,?,?,?,?)').run(approvalId,approvalId,now,now,ttl);
+  return this.taskLink(approvalId);
+ }
+ taskLink(id){if(!validId(id))return null;const row=this.db.prepare('SELECT * FROM task_links WHERE task_id=?').get(id);return row&&Date.now()<=row.created_at+row.ttl?row:null}
  public(row){if(!row)return null;return {id:row.id,pending_id:row.id,created_at:row.created_at,expires_at:row.expires_at,tool:row.tool,arguments_hash:row.args_sha,status:this.state(row),preview:row.preview,error:row.error||undefined}}
  state(row){if(row.status==='pending'&&Date.now()>=row.expires_at)return 'expired';return row.status}
  complete(id,decision){

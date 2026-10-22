@@ -1,0 +1,45 @@
+name: macOS developer build
+on:
+  push:
+    branches: [main, integration/macos-ci-20261021]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install Node dependencies
+        run: npm ci --ignore-scripts
+      - name: Compile Keychain helper
+        run: swiftc native/macos/keychain-helper.swift -framework Security -o native/macos/home-mcp-keychain
+      - name: Prepare Playwright MCP worker
+        run: |
+          mkdir -p build/macos-worker
+          npm install --prefix build/macos-worker --no-audit --no-fund --ignore-scripts --save=false @playwright/mcp@0.0.48
+      - name: Run tests
+        run: npm test
+      - name: macOS Host smoke test
+        run: sh scripts/macos/smoke-host.sh
+      - name: Build SwiftUI Manager
+        run: sh scripts/macos/build-manager.sh
+      - name: Build unsigned developer package
+        run: sh scripts/macos/package.sh
+      - name: Upload test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: homemcp-${{ matrix.runner }}-unsigned
+          path: |
+            build/macos-dist/HomeMCP-unsigned.pkg
+            build/macos-manager/HomeMCP Manager.app
+          if-no-files-found: error
+          retention-days: 14

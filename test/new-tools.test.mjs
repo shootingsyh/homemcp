@@ -13,8 +13,8 @@ test('new browser tools are registered; file deletion cannot bypass approval',as
   const listenPort=await new Promise(resolve=>socket.listen(0,'127.0.0.1',()=>resolve(socket.address().port)));
   await new Promise(resolve=>socket.close(resolve));
   const config=path.join(directory,'config.json');
-  const browserTools=['browser_click','browser_type','browser_press_key','browser_tabs'];
-  fs.writeFileSync(config,JSON.stringify({port:listenPort,token:'test-token',dataDir:directory,workers:[],tools:Object.fromEntries(browserTools.map(name=>[name,{worker:'missing',upstream:name}]))}));
+  const browserTools=['browser_click','browser_type','browser_press_key','browser_tabs','browser_navigate'];
+  fs.writeFileSync(config,JSON.stringify({port:listenPort,token:'test-token',dataDir:directory,workers:[{name:'missing',command:process.execPath,args:['--version']}],security:{policy:{browser_navigate:'ask'}},tools:Object.fromEntries(browserTools.map(name=>[name,{worker:'missing',upstream:name}]))}));
   const child=spawn(process.execPath,['src/server.mjs','--config',config],{cwd:process.cwd(),stdio:'ignore'});
   try{
     let ready=false;
@@ -30,6 +30,18 @@ test('new browser tools are registered; file deletion cannot bypass approval',as
     };
     const listed=(await rpc('tools/list',{})).result.tools.map(x=>x.name);
     for(const name of [...browserTools,'file_delete','approval_resume'])assert.ok(listed.includes(name),`${name} missing`);
+    const pending=await rpc('tools/call',{name:'browser_navigate',arguments:{url:'https://example.org'}});
+    assert.ok(Array.isArray(pending.result.content),'MCP CallToolResult.content is required');
+    assert.equal(pending.result.structuredContent.status,'approval_required');
+    const payload=JSON.parse(pending.result.content[0].text);
+    assert.equal(payload.pending_id,pending.result.structuredContent.pending_id);
+    assert.ok(payload.approval_url.startsWith('http://localhost:'));
+    assert.ok(payload.approval_url.includes('/approval?pending_id='));
+    for(const tool of ['approval_status','approval_result','approval_resume']){
+      const reply=await rpc('tools/call',{name:tool,arguments:{pending_id:payload.pending_id,arguments_hash:payload.arguments_hash}});
+      assert.ok(Array.isArray(reply.result.content),tool+' lacks content');
+      assert.equal(JSON.parse(reply.result.content[0].text).pending_id,payload.pending_id);
+    }
     const denied=await rpc('tools/call',{name:'file_delete',arguments:{path:'C:\\Windows\\system.ini'}});
     assert.ok(denied.error,'unapproved or out-of-home deletion must fail');
   }finally{

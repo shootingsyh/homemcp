@@ -1,8 +1,7 @@
+import {createCredentialProtector} from './platform/credential-protector.mjs';
 import {DatabaseSync} from 'node:sqlite';
-import {spawn} from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import crypto from 'node:crypto';
 import {getDomain} from 'tldts';
 
 export function normalizeOrigin(raw){
@@ -21,24 +20,12 @@ export function credentialDomain(origin){
 }
 function validName(username){return typeof username==='string'&&username.length>0&&username.length<=320&&!/[\r\n\0]/.test(username)}
 function bindKey(origin,username){return Buffer.from(origin+'\0'+username,'utf8').toString('base64')}
-async function dpapi(script,operation,binding,secret){
- if(process.platform!=='win32')throw new Error('windows_dpapi_required');
- return await new Promise((resolve,reject)=>{
-  const child=spawn('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-Operation',operation,'-Binding',binding],{windowsHide:true,timeout:15000,stdio:['pipe','pipe','ignore']});
-  let output='',failed=false;
-  child.stdout.on('data',chunk=>{output+=chunk.toString();if(output.length>131072){failed=true;child.kill()}});
-  child.on('error',()=>reject(new Error('credential_protection_unavailable')));
-  child.on('close',code=>{if(code!==0||failed||!/^[A-Za-z0-9+/=]+$/.test(output))return reject(new Error('credential_protection_failed'));resolve(Buffer.from(output,'base64'))});
-  child.stdin.on('error',()=>{});
-  child.stdin.end(Buffer.from(secret).toString('base64'),'ascii');
- });
-}
 export class CredentialVault{
- constructor(dataDir,script,protect=dpapi){
+ constructor(dataDir,script,protect=null){
   fs.mkdirSync(dataDir,{recursive:true});
   this.db=new DatabaseSync(path.join(dataDir,'credentials.sqlite'));
   this.db.exec('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS credentials (origin TEXT NOT NULL, username TEXT NOT NULL, ciphertext TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(origin, username))');
-  this.script=script;this.protect=protect;
+  this.script=script;this.protect=protect||createCredentialProtector();
  }
  async save({origin,username,password,replace=false}){
   const site=credentialDomain(origin);

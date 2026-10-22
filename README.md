@@ -1,48 +1,207 @@
 # HomeMCP
 
-Windows-first MCP runtime providing a fixed Browser/Windows Desktop tool surface with on-demand worker supervision, dynamic loopback ports and local human approval.
+**Connect your own computer to MCP-compatible AI assistants — with OAuth, Passkey approval, and your choice of hosted or self-hosted connectivity.**
 
-**Status: pre-release source. Not an installable, tested MSI yet. Do not expose to public internet.**
+HomeMCP is a local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) host that exposes browser and desktop automation tools to authorized AI clients. The tools execute **on your computer**, under a local policy and human-approval layer. HomeMCP is not a hosted remote desktop: your own machine runs the workers, holds the credentials, and enforces approvals.
 
-## Repo contents
+> **Pre-release / source available.** Windows has been deployed and exercised on a development machine, but clean-machine installer, upgrade, and security release gates are **not yet complete**. macOS is under active development and **has not yet passed real-Mac end-to-end testing**. The project source is licensed under the [MIT License](LICENSE). Third-party dependencies retain their own licenses.
 
-- `src/`: Host, MCP client, owned-worker supervisor, remote egress adapter (disabled by default), SQLite HITL, WebAuthn Passkey integration.
-- `web/`: local-only approval UI.
-- `test/`: unit and local integration tests.
-- `scripts/`: development installation, local provisioning, smoke test and launcher.
-- `packaging/`: WiX 6 MSI payload construction, candidate build and manifest generation.
-- `.github/workflows/windows-msi.yml`: Windows candidate pipeline; **not yet verified end-to-end**.
+## How it works
 
-Development only (Node.js 22+ must be installed):
-```powershell
-npm.cmd install
-npm.cmd test
-powershell -ExecutionPolicy Bypass -File .\scripts\install-dev.ps1
-powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\HomeMCP-dev\scripts\start-dev.ps1"
+```text
+ChatGPT / Muse / another MCP client
+                  |
+               HTTPS + OAuth
+                  |
+       +-------------------------+
+       | YOUR public endpoint    |
+       | Managed or your tunnel  |
+       +-------------------------+
+                  |
+       HomeMCP on YOUR computer
+       - OAuth / PKCE
+       - Passkey registration and approval
+       - Tool allow / ask / deny policies
+       - Local SQLite state and audit
+                  |
+          MCP tool workers
+       Browser / desktop / more
 ```
 
-The development installer uses the user's globally installed workers; the MSI *build* is designed to bundle private runtimes. Neither should replace existing Airlock or modify the user's active MCP services.
+## Choose a connection mode
 
-The MSI candidate cannot be considered zero-dependency or auto-updating until its Windows build, clean install, stop/upgrade/uninstall and real Browser/Desktop E2E tests pass. See [design](docs/design.md), [MSI status](docs/msi-status.md) and [release gates](docs/release.md).
+| | HomeMCP Managed | Bring Your Own Tunnel (BYOT) |
+|---|---|---|
+| Who provides the HTTPS domain? | HomeMCP subdomain | You |
+| Who operates the tunnel? | HomeMCP FRP | You (e.g. Cloudflare Tunnel or a reverse proxy) |
+| HomeMCP cloud account/API needed? | Yes, for enrollment and tunnel | **No** |
+| HomeMCP subscription? | Yes | **No HomeMCP tunnel subscription** |
+| MCP authentication | Local OAuth + Passkey | **The same local OAuth + Passkey** |
+| State after reinstall | Retained local configuration | Retained local configuration, or reconfigure your tunnel |
+| Recovery after OS wipe | Recovery Key workflow **not yet implemented** | Recover your DNS/tunnel separately and re-enroll |
 
-## Windows tray and local settings
+**No hybrid mode:** using HomeMCP's paid tunnel includes its HomeMCP domain. A custom domain is supported through BYOT, not through HomeMCP Managed FRP.
 
-The Windows MSI includes a lightweight tray manager with Start/Stop/Restart and native Settings. See [manager usage](docs/manager.md). CLI uses a current-user-only named pipe. External URL configuration does not automatically expose your computer; Cloudflare setup remains opt-in.
+OAuth replaces *manually copying a static bearer token*. OAuth access tokens themselves still use bearer-token semantics. A static token remains a legacy/advanced compatibility path.
 
-### Agent-controlled credentials (Windows)
-HomeMCP optionally exposes `credential_save` and `credential_fill` when
-`security.credentialVaultEnabled` is explicitly set to `true` in the installed
-configuration. An authenticated Muse client calls `credential_save` with the
-*HTTPS site*, username and password. Passwords are encrypted using
-Windows DPAPI CurrentUser before being stored in a separate SQLite database;
-existing credentials require `replace: true` to overwrite.
+## Quick start
 
-`credential_fill` takes `origin`, `username`, `username_selector`, and
-`password_selector` (CSS selectors). The browser worker checks the *actual
-current page hostname* and both unique, visible input types in the same browser
-execution before filling. Only a nonsecret fill status is returned. The site
-itself can read submitted credentials; use only trusted login origins. Password
-contents are never put into the standard Passkey approval queue. Normal
-browser tools cannot retrieve the vault; no plaintext export tool is provided.
+### Windows (development / pre-release)
 
-Credential scope uses the Public Suffix List registrable domain (eTLD+1), so login.example.co.uk and www.example.co.uk share a record, but unrelated co.uk sites do not. Exact-origin records from older versions remain readable from their original origin.
+**Requirements:** Windows 11, a working browser, and PowerShell. For development builds, Node.js 22+ and the prerequisites listed in the build scripts are needed.
+
+1. Clone the repository and install the dependencies:
+
+   ```powershell
+   git clone https://github.com/shootingsyh/homemcp.git
+   cd homemcp
+   npm ci
+   npm test
+   ```
+
+2. For a local **development-only** installation:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\install-dev.ps1
+   ```
+
+   The developer installation is distinct from the installed Windows Manager/MSI runtime. It is **not** a complete one-click public release.
+
+3. If you have a separately built and tested MSI, install it and open **HomeMCP Manager** from the tray. The Windows Manager handles Start / Stop / Restart and local settings. See [Windows Manager](docs/manager.md) and [Windows release status](docs/msi-status.md). **Do not assume a public signed MSI download currently exists.**
+
+4. Select **HomeMCP Managed** or **Bring Your Own Tunnel**. In BYOT, set up your HTTPS tunnel before binding the public origin. Confirm connectivity before registering devices.
+
+### macOS (source / experimental)
+
+**Requirements:** macOS, Node.js 22+, Xcode command-line tools with Swift compiler, and a browser compatible with the configured Playwright worker.
+
+```sh
+git clone https://github.com/shootingsyh/homemcp.git
+cd homemcp
+./scripts/macos/install.sh
+```
+
+The installer script installs dependencies, compiles the local Keychain helper and an **unsigned development SwiftUI Manager**, provisions a local-only host, and creates a user LaunchAgent. Configuration is retained at:
+
+```text
+~/Library/Application Support/HomeMCP/config.json
+```
+
+The SwiftUI Manager currently provides local restore, status, BYOT setup and Passkey QR entry points. macOS Managed FRP **is not yet fully activated end-to-end**; the desktop MCP worker is opt-in and initially exposes only read-only inspection tools. No notarized distributable package is available yet. See [macOS parity](docs/macos-feature-parity.md) and [upstream audit](docs/macos-upstream-audit.md).
+
+## BYOT: bring your own domain and tunnel
+
+BYOT is for people who already have **their own working HTTPS route** into their computer. It requires **no HomeMCP cloud API, enrollment or subscription**.
+
+You provide:
+
+- A public HTTPS origin, for example `https://mcp.example.com`. The TLS certificate must be valid for that name.
+- A tunnel or proxy (Cloudflare Tunnel, your own FRP/reverse proxy, etc.) that forwards traffic securely to the **local HomeMCP Host**. Do not point it to an unrelated app.
+- Control of DNS and the tunnel credentials. Those stay under your control.
+
+### Example: Cloudflare Tunnel
+
+This is an **illustrative** Cloudflare ingress configuration, **not** a copy-paste turnkey command. Replace the hostname and local Host port with your own values, and configure Cloudflare Tunnel credentials, DNS and access controls separately.
+
+```yaml
+ingress:
+  - hostname: mcp.example.com
+    service: http://127.0.0.1:YOUR_HOMEMCP_PORT
+  - service: http_status:404
+```
+
+The local HomeMCP port is generated in `config.json`. Keep the Host bound to loopback. The public edge must validate HTTPS and preserve the intended Host header and path, including `/mcp` and `/.well-known/`.
+
+**Important:** If your proxy/Cloudflare Access configuration intercepts or blocks OAuth discovery, authorization callbacks, the MCP endpoint, or Passkey pages, connecting an MCP client may fail. Do not disable HomeMCP OAuth/approval to work around that; configure the tunnel securely for the required routes.
+
+### Verify before activating BYOT
+
+HomeMCP's developing setup flow checks:
+
+1. The URL has a valid public HTTPS hostname and DNS resolution.
+2. TLS validation succeeds.
+3. A short-lived random challenge from the local Host is returned **through the public tunnel**, proving it reaches this installation.
+4. OAuth authorization-server metadata advertises the selected issuer.
+5. Protected-resource metadata identifies `https://mcp.example.com/mcp`.
+
+An arbitrary HTTP 200 or a CNAME alone is **not** sufficient. If verification fails, correct the tunnel/DNS/certificate and retry. The setup should not be marked complete.
+
+**Windows:** Use the Manager's BYOT/public URL controls and validation flow. The first-run UX is still being hardened; [Windows Manager](docs/manager.md) describes the existing controls.
+
+**macOS (experimental):** Start the local HomeMCP LaunchAgent first, then use the SwiftUI Manager's BYOT verification action or the underlying CLI:
+
+```sh
+node scripts/macos/setup.mjs status
+node scripts/macos/setup.mjs byot https://mcp.example.com
+```
+
+A failed verification restores the prior local configuration. Mac-specific first-run and rollback behavior still requires real-device testing. Do **not** run an untested setup against a production system without a configuration backup.
+
+### Connect ChatGPT or another MCP client
+
+Once your public tunnel works and HomeMCP OAuth is configured:
+
+1. Add a **remote MCP connector** in your MCP-capable client.
+2. Enter your endpoint: `https://mcp.example.com/mcp` (for Managed, use the subdomain assigned to you plus `/mcp`).
+3. Select **OAuth** authentication when supported.
+4. The client should discover the HomeMCP OAuth metadata and open the authorization flow.
+5. Complete Passkey registration/authorization using a trusted device, then invoke an innocuous read-only tool to verify connectivity.
+
+Your client must actually support remote HTTP MCP and compatible OAuth flows. Exact connector creation menus vary by product and plan. OAuth compatibility and tool discovery have been tested in development, but individual client integrations may differ.
+
+### Add a phone or other trusted device
+
+On the Windows Manager choose **Set up Passkey (QR)**; macOS provides a corresponding **Set Up Passkey (QR)** action. Scan the code shown on the computer with a phone, or open the enrollment link locally. Follow the Passkey prompts.
+
+The first device requires a trusted bootstrap; additional devices must be authorized through an existing trusted approval path. **Scanning a QR code is not permission to silently add devices.** Passkey credentials are bound to the selected HTTPS origin — changing domains can require new registration.
+
+## Using HomeMCP
+
+HomeMCP exposes tools according to your configured workers and policy. Available implementations include browser navigation/snapshots, Windows desktop operations, Passkey-protected approvals, and optional website credential handling. macOS computer-use functionality is not yet equivalent to Windows.
+
+Tool policy is **allow / ask / deny**. Sensitive actions should require explicit Passkey approval. Approval pages are not access tokens and cannot substitute for OAuth authentication.
+
+### Keep your installation safe
+
+- Keep your OS, browser, HomeMCP and MCP clients updated.
+- Never publish the local-only management interface directly.
+- Keep static tokens, OAuth databases, Keychain/DPAPI records, enrollment credentials and TLS private keys secret. **Do not commit your installed `config.json` or data directory.**
+- Treat a connected AI client as a powerful operator. Review sensitive actions before approving.
+- Use separate test environments for changes to tunnel identities, certificates, billing, device registration and recovery.
+- Do not enable arbitrary shell or unattended high-risk tools by default.
+
+## Reinstalling and recovery
+
+HomeMCP preserves existing local configuration when possible.
+
+- **Reinstall on the same OS user profile:** preserved application data can restore the setup automatically. Encrypted tunnel credentials may be tied to that OS user.
+- **Clean OS reinstall or new computer:** BYOT users reconfigure their own tunnel and device enrollment. Managed-domain Recovery Key-based reclaim **is planned but not implemented**. Do not delete the only copy of active enrollment credentials expecting automatic recovery.
+- **Domain changes:** OAuth issuer and Passkey relying-party domain change; existing client authorizations may need to be redone.
+
+## Development
+
+```sh
+npm ci
+npm test
+```
+
+Project areas:
+
+| Directory | Purpose |
+|---|---|
+| `src/` | Shared local MCP Host, OAuth, approvals, SQLite and worker clients |
+| `web/` | OAuth/Passkey approval and enrollment pages |
+| `native/Manager/` | Windows tray Manager |
+| `native/macos/` | macOS SwiftUI Manager and Keychain helper |
+| `scripts/` | Install, setup, certificates, tunnels and service lifecycle |
+| `packaging/` | Windows MSI packaging scripts |
+| `test/` | Unit and local integration tests |
+| `docs/` | Design, security and release readiness notes |
+
+For platform details see [architecture and safeguards](docs/design.md), [Windows release gates](docs/release.md), [macOS feature parity](docs/macos-feature-parity.md), and [managed/BYOT recovery boundaries](docs/connection-setup-recovery.md).
+
+## Project status and open source
+
+HomeMCP is **pre-release**. The Windows environment has been exercised in development; macOS is actively being brought to parity. Installer reliability, platform permissions, threat modeling, release signing, and clean-device E2E are still ongoing.
+
+Contributions and bug reports can help once the repository is prepared for public collaboration. **Third-party notices, secret/history audit, security reporting instructions and reproducible release artifacts should be added before making the repository public.** The [MIT License](LICENSE) covers HomeMCP project code; it does not grant rights to third-party trademarks.
