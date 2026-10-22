@@ -59,6 +59,27 @@ sealed class TrayContext : ApplicationContext {
   menu.Items.Add("Exit manager",null,(_,_)=>{Stop();cancel.Cancel();supervisor.Dispose();tray.Visible=false;ExitThread();});
   tray.ContextMenuStrip=menu;
   tray.DoubleClick+=(_,_)=>OpenSettings();
+  if(Environment.GetEnvironmentVariable("HOMEMCP_UI_SMOKE")=="1"){
+   // Real WinForms startup/layout check in an isolated CI runner: no Host, relay,
+   // credentials or monitoring are started.
+   OpenSettings();
+   var probe=new System.Windows.Forms.Timer{Interval=500};
+   probe.Tick+=(_,_)=>{
+    probe.Stop();
+    try{
+     if(settings is null||!settings.Visible||settings.Controls.Count==0)throw new Exception("manager_ui_not_visible");
+     var controls=new System.Collections.Generic.List<Control>();
+     void Collect(Control root){controls.Add(root);foreach(Control child in root.Controls)Collect(child);}
+     Collect(settings);
+     if(!controls.OfType<Button>().Any())throw new Exception("manager_ui_buttons_missing");
+     var marker=Environment.GetEnvironmentVariable("HOMEMCP_UI_SMOKE_MARKER");
+     if(!String.IsNullOrEmpty(marker))File.WriteAllText(marker,"HOMEMCP_UI_READY");
+    }catch(Exception e){Environment.ExitCode=1;Console.Error.WriteLine(e);}
+    finally{tray.Visible=false;settings?.Close();ExitThread();}
+   };
+   probe.Start();
+   return;
+  }
   _=Task.Run(()=>PipeLoop(cancel.Token));
   monitor.Tick+=async (_,_)=>await MonitorCycle();
   monitor.Start();
