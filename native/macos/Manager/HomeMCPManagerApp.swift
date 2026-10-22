@@ -27,7 +27,7 @@ struct SetupView: View {
         if let explicit = ProcessInfo.processInfo.environment["HOMEMCP_NODE_PATH"] { return explicit }
         let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/HomeMCP/runtime/node").path
         if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
-        for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
+        // Installed builds must not silently fall back to an obsolete system Node.\n        if appRoot.hasPrefix("/Applications/") { return bundled }\n        for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
             if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
         }
         return "/usr/local/bin/node"
@@ -96,7 +96,7 @@ struct SetupView: View {
             .appendingPathComponent("scripts/macos/\(filename)").path
         Task {
             let result = await Task.detached {
-                ScriptRunner.execute(executable, [script] + args)
+                let version = ScriptRunner.execute(executable, ["--version"])\n                if version.code != 0 { return (code: version.code, output: "Node runtime failed: "+executable+"\\n"+version.output) }\n                return ScriptRunner.execute(executable, [script] + args)
             }.value
             running = false
                 if result.code == 0 && openURL {
