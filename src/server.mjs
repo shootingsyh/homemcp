@@ -209,6 +209,7 @@ const server=http.createServer(async(req,res)=>{
   }
 
   if(!adminAuthorized(req.headers.authorization,config.security?.adminToken))return send(401,{error:'unauthorized'});
+  if(req.url==='/admin/setup-status'&&req.method==='GET')return send(200,{passkeyCount:passkeys.list().length,publicOrigin:publicUrl||null,hostReady:true});
   if(req.url==='/admin/enrollment'&&req.method==='POST'){
    const invitation=passkeys.issueEnrollmentInvite();
    const base=config.security?.rpOrigin||`http://localhost:${port}`;
