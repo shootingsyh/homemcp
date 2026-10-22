@@ -5,7 +5,7 @@ ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 VERSION=$(node -p "require('$ROOT/package.json').version")
 DEST="$ROOT/build/macos-dist"
 PAYLOAD="$DEST/payload"
-"$ROOT/scripts/macos/build-manager.sh"
+sh "$ROOT/scripts/macos/build-manager.sh"
 MANAGER="$PAYLOAD/Applications/HomeMCP Manager.app"
 rm -rf "$MANAGER"
 mkdir -p "$PAYLOAD/Applications" "$DEST"
