@@ -25,6 +25,11 @@ node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)'
 mkdir -p "$RESOURCES/runtime"
 cp -L "$NODE_BIN" "$RESOURCES/runtime/node"
 chmod 755 "$RESOURCES/runtime/node"
+# Fail the build if the packaged runtime cannot parse the exact scripts shipped.
+"$RESOURCES/runtime/node" --check "$RESOURCES/scripts/macos/setup.mjs"
+"$RESOURCES/runtime/node" --check "$RESOURCES/scripts/macos/provision.mjs"
+"$RESOURCES/runtime/node" --check "$RESOURCES/scripts/macos/passkey-link.mjs"
+"$RESOURCES/runtime/node" --version
 if [ -d "$ROOT/node_modules" ]; then cp -R "$ROOT/node_modules" "$RESOURCES/"; fi
 if [ -d "$ROOT/build/macos-worker" ]; then
   mkdir -p "$RESOURCES/build"
