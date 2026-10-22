@@ -110,7 +110,7 @@ sealed class TrayContext : ApplicationContext {
  }
  bool RequirementsOK()=>File.Exists(Path.Combine(app,"runtime","node.exe"))
   &&File.Exists(Path.Combine(app,"workers","playwright","cli.mjs"))
-  &&File.Exists(Path.Combine(app,"workers","windows-mcp.exe"))
+  &&File.Exists(Path.Combine(app,"workers","windows-mcp","python.exe"))
   &&File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe"));
  async Task ProbeHealth(){
   string result="Unavailable";
@@ -273,7 +273,7 @@ sealed class TrayContext : ApplicationContext {
   foreach(var entry in workers){
    if(entry is not JsonObject worker || worker["name"]?.GetValue<string>()!="desktop")continue;
    var old=worker["command"]?.GetValue<string>()??"";
-   if(!old.EndsWith(@"\\workers\\windows-mcp.exe",StringComparison.OrdinalIgnoreCase))continue;
+   if(!old.EndsWith(Path.Combine("workers","windows-mcp.exe"),StringComparison.OrdinalIgnoreCase))continue;
    worker["command"]=bundled;
    var args=worker["args"] as JsonArray;
    var next=new JsonArray("-m","windows_mcp");
