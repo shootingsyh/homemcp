@@ -428,82 +428,153 @@ sealed class TrayContext : ApplicationContext {
    Process.Start(new ProcessStartInfo("http://127.0.0.1:"+port+"/passkeys"){UseShellExecute=true});
   }catch(Exception ex){MessageBox.Show(ex.Message,"HomeMCP");}
  }
+
+ async Task<(bool hasOrigin,int passkeys,string origin)> ReadWizardStatus(){
+  if(!File.Exists(ConfigPath))return (false,0,"");
+  var config=JsonNode.Parse(await File.ReadAllTextAsync(ConfigPath));
+  var port=config?["port"]?.GetValue<int>()??0;
+  var token=config?["security"]?["adminToken"]?.GetValue<string>()??"";
+  if(port<1||String.IsNullOrEmpty(token))throw new Exception("Local Host is not configured.");
+  using var req=new HttpRequestMessage(HttpMethod.Get,"http://127.0.0.1:"+port+"/admin/setup-status");
+  req.Headers.Authorization=new AuthenticationHeaderValue("Bearer",token);
+  using var response=await http.SendAsync(req);
+  response.EnsureSuccessStatusCode();
+  var obj=JsonNode.Parse(await response.Content.ReadAsStringAsync());
+  var origin=obj?["publicOrigin"]?.GetValue<string>()??"";
+  var count=obj?["passkeyCount"]?.GetValue<int>()??0;
+  return(origin.StartsWith("https://",StringComparison.OrdinalIgnoreCase),count,origin);
+ }
  void OpenSettings(){
   if(settings is {IsDisposed:false}){settings.Activate();return;}
-  var form=new Form{Text=SetupDone?"HomeMCP Settings and Health":"HomeMCP First-run Setup",Width=690,Height=760,StartPosition=FormStartPosition.CenterScreen,MinimumSize=new Size(660,700)};
+  if(!SetupDone){OpenSetupWizard();return;}
+  var form=new Form{Text="HomeMCP Control Center",Width=660,Height=490,StartPosition=FormStartPosition.CenterScreen};
   settings=form;
-  var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=15,Padding=new Padding(18),AutoScroll=true};
-  layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,25));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,180));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,45));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,28));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,65));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,26));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,75));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,45));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,92));
-  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,35));
-  statusLabel=new Label{Text=Status,AutoSize=true,Font=new Font("Segoe UI",11,FontStyle.Bold)};layout.Controls.Add(statusLabel);
-  var actions=new FlowLayoutPanel{Dock=DockStyle.Fill};
+  var content=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.TopDown,WrapContents=false,Padding=new Padding(22),AutoScroll=true};
+  statusLabel=new Label{Text=Status,AutoSize=true,Font=new Font("Segoe UI",12,FontStyle.Bold)};
+  content.Controls.Add(statusLabel);
+  componentsLabel=new Label{Text=ComponentReport(),AutoSize=true,Font=new Font("Consolas",9)};
+  content.Controls.Add(componentsLabel);
+  var actions=new FlowLayoutPanel{Width=570,Height=45};
   var start=new Button{Text="Start",Width=100};start.Click+=(_,_)=>{Start();_=ProbeHealth();};
   var stop=new Button{Text="Stop",Width=100};stop.Click+=(_,_)=>{Stop();_=ProbeHealth();};
   var restart=new Button{Text="Restart",Width=100};restart.Click+=(_,_)=>{Stop();Start();_=ProbeHealth();};
-  var refresh=new Button{Text="Check now",Width=110};refresh.Click+=async (_,_)=>await ProbeHealth();
-  actions.Controls.AddRange([start,stop,restart,refresh]);layout.Controls.Add(actions);
-  layout.Controls.Add(new Label{Text="Component diagnostics (refreshes every 5 seconds)",AutoSize=true});
-  componentsLabel=new Label{Text=ComponentReport(),Dock=DockStyle.Fill,Font=new Font("Consolas",9),AutoSize=false};
-  layout.Controls.Add(componentsLabel);
-  var explain=new Label{Text="1. Check runtime components. 2. Choose local-only or record an HTTPS address. 3. Start and verify the host.",Dock=DockStyle.Fill,AutoSize=false};layout.Controls.Add(explain);
-  var connectionOptions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoSize=false};
-  connectionOptions.Controls.Add(new Label{Text="Connection setup (choose one existing mode)",AutoSize=true,Font=new Font("Segoe UI",9,FontStyle.Bold)});
-  var choiceActions=new FlowLayoutPanel{Width=600,Height=39};
-  var managedChoice=new Button{Text="HomeMCP Managed (paid)",AutoSize=true};
-  managedChoice.Click+=(_,_)=>MessageBox.Show("Managed mode includes a HomeMCP subdomain and our FRP tunnel. Enrollment is currently available through the Oracle setup command. Existing local enrollment and credentials are retained across normal reinstalls. Recovery on a wiped system still requires a cloud recovery endpoint.","Managed connection");
-  var ownChoice=new Button{Text="Bring Your Own Tunnel (free)",AutoSize=true};
-  ownChoice.Click+=(_,_)=>{MessageBox.Show("Configure your own HTTPS tunnel first, then enter its public HTTPS origin below and click Bind / change domain. HomeMCP does not manage your tunnel credentials.","Self-hosted connection");};
-  choiceActions.Controls.AddRange([managedChoice,ownChoice]);connectionOptions.Controls.Add(choiceActions);
-  var recoveryActions=new FlowLayoutPanel{Width=600,Height=33};
-  var localRestore=new Button{Text="Restore saved local setup",AutoSize=true};
-  localRestore.Click+=(_,_)=>{
-   var exists=File.Exists(ConfigPath);
-   var message=exists?"Existing HomeMCP configuration found. Reinstall preserves this configuration. Use Recheck and start to resume. Managed Tunnel credentials also require the original Windows user DPAPI keys.":"No existing local configuration was found. Domain recovery after a wiped OS is not supported yet; do not register a replacement paid domain. Keep your Recovery Key safe for the upcoming cloud recovery flow.";
-   MessageBox.Show(message,"Restore HomeMCP");
+  var check=new Button{Text="Check Health",Width=115};check.Click+=async (_,_)=>await ProbeHealth();
+  actions.Controls.AddRange([start,stop,restart,check]);content.Controls.Add(actions);
+  var passkeyActions=new FlowLayoutPanel{Width=570,Height=45};
+  var add=new Button{Text="Add Device QR",Width=135};add.Click+=async (_,_)=>await OpenPasskeySetup();
+  var manage=new Button{Text="Manage Passkeys",Width=145};manage.Click+=(_,_)=>OpenPasskeyManagement();
+  passkeyActions.Controls.AddRange([add,manage]);content.Controls.Add(passkeyActions);
+  var wizard=new Button{Text="Restart Setup Wizard…",Width=200,Height=35};
+  wizard.Click+=(_,_)=>{
+   if(MessageBox.Show("Return to the first setup page? Your Host config, credentials and Passkeys will be preserved. Domain changes need a deliberate rebind.","Restart setup",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+   File.Delete(Path.Combine(dir,"setup-complete.marker"));
+   form.Close();OpenSetupWizard();
   };
-  recoveryActions.Controls.Add(localRestore);connectionOptions.Controls.Add(recoveryActions);
-  layout.Controls.Add(connectionOptions);
-  layout.Controls.Add(new Label{Text="Existing setups are preserved. Full OS-reinstall domain recovery requires a separate cloud-side Recovery Key API.",AutoSize=true});
-  layout.Controls.Add(new Label{Text="HomeMCP public HTTPS URL (change OAuth + Passkey domain; configure tunnel separately)",AutoSize=true});
-  hostnameBox=new TextBox{Dock=DockStyle.Fill,Text=ReadState()["url"]?.GetValue<string>()??""};layout.Controls.Add(hostnameBox);
-  var passkeyActions=new FlowLayoutPanel{Dock=DockStyle.Fill};
-  var setupPasskey=new Button{Text="Set up Passkey (QR)",AutoSize=true};setupPasskey.Click+=async (_,_)=>await OpenPasskeySetup();
-  var managePasskeys=new Button{Text="Devices / Add Device",AutoSize=true};managePasskeys.Click+=(_,_)=>OpenPasskeyManagement();
-  passkeyActions.Controls.AddRange([setupPasskey,managePasskeys]);
-  layout.Controls.Add(passkeyActions);
-  var network=new FlowLayoutPanel{Dock=DockStyle.Fill};
-  var save=new Button{Text="Bind / change domain",AutoSize=true};save.Click+=(_,_)=>SaveHostname();
-  var cloud=new Button{Text="Advanced tunnel setup",AutoSize=true};cloud.Click+=(_,_)=>LaunchNetworkWizard();
-  network.Controls.AddRange([save,cloud]);layout.Controls.Add(network);
-  layout.Controls.Add(new Label{Text="Cloudflare Tunnel (optional; requires Access protection before publishing)",AutoSize=true});
-  cloudflareStatus=new Label{Text="Checking existing Cloudflare configuration...",Dock=DockStyle.Fill,AutoSize=false};
-  layout.Controls.Add(cloudflareStatus);
-  var cfActions=new FlowLayoutPanel{Dock=DockStyle.Fill};
-  var cfCheck=new Button{Text="Detect tunnel",AutoSize=true};cfCheck.Click+=async (_,_)=>await DiscoverCloudflare();
-  var cfPlan=new Button{Text="Save Cloudflare plan",AutoSize=true};cfPlan.Click+=(_,_)=>SaveCloudflarePlan();
-  cfActions.Controls.AddRange([cfCheck,cfPlan]);layout.Controls.Add(cfActions);
-  _=DiscoverCloudflare();
-  var foot=new FlowLayoutPanel{Dock=DockStyle.Fill};
-  var finish=new Button{Text=SetupDone?"Recheck and start":"Finish setup and start",Width=210,Height=34};
-  finish.Click+=(_,_)=>FinishSetup();foot.Controls.Add(finish);
-  foot.Controls.Add(new Label{Text="Remote access remains OFF until secure setup is implemented.",AutoSize=true});
-  layout.Controls.Add(foot);
+  content.Controls.Add(wizard);
+  form.Controls.Add(content);
+  form.FormClosed+=(_,_)=>{settings=null;statusLabel=null;componentsLabel=null;};
+  form.Show();
+ }
+ void OpenSetupWizard(){
+  if(settings is {IsDisposed:false}){settings.Activate();return;}
+  var form=new Form{Text="HomeMCP Setup Wizard",Width=680,Height=460,MinimumSize=new Size(625,400),StartPosition=FormStartPosition.CenterScreen};
+  settings=form;
+  var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Padding=new Padding(24)};
+  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,45));
+  layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));
+  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,55));
+  var title=new Label{Dock=DockStyle.Fill,Font=new Font("Segoe UI",15,FontStyle.Bold)};
+  var page=new Panel{Dock=DockStyle.Fill};
+  var footer=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft};
+  var next=new Button{Text="Next",Width=165,Height=33};
+  var back=new Button{Text="Back",Width=100,Height=33};
+  var message=new Label{Dock=DockStyle.Fill,Text="Existing credentials and local data are preserved.",AutoEllipsis=true};
+  footer.Controls.Add(next);footer.Controls.Add(back);
+  layout.Controls.Add(title,0,0);layout.Controls.Add(page,0,1);layout.Controls.Add(footer,0,2);layout.Controls.Add(message,0,3);
   form.Controls.Add(layout);
-  form.FormClosed+=(_,_)=>{statusLabel=null;componentsLabel=null;hostnameBox=null;cloudflareStatus=null;settings=null;};
+  int step=0;bool busy=false;string choice="external";
+  TextBox? domainBox=null;
+  void SetBusy(bool value){busy=value;next.Enabled=!value;back.Enabled=!value;}
+  void ShowStep(){
+   page.Controls.Clear();
+   title.Text=step switch{0=>"1 / 3   Choose connection",1=>"2 / 3   Verify your tunnel",_=>"3 / 3   Register Passkey"};
+   back.Visible=step>0;
+   next.Text=step switch{0=>"Continue",1=>"Verify and Continue",_=>"Verify registration and Finish"};
+   var body=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoScroll=true};
+   page.Controls.Add(body);
+   if(step==0){
+    var byot=new RadioButton{Text="Bring Your Own Tunnel (free)",Checked=choice=="external",AutoSize=true};
+    var managed=new RadioButton{Text="HomeMCP Managed (existing enrollment)",Checked=choice=="managed",AutoSize=true};
+    byot.CheckedChanged+=(_,_)=>{if(byot.Checked)choice="external";};
+    managed.CheckedChanged+=(_,_)=>{if(managed.Checked)choice="managed";};
+    body.Controls.Add(byot);body.Controls.Add(managed);
+    body.Controls.Add(new Label{Width=570,Height=90,Text="BYOT: configure your own public HTTPS domain and tunnel. Managed: use a previously enrolled HomeMCP domain. New paid Managed enrollment is not yet available from this wizard."});
+   }else if(step==1){
+    body.Controls.Add(new Label{Width=565,Height=60,Text=choice=="external"?"Configure your own HTTPS tunnel so it routes to this local HomeMCP, then bind and verify the public origin.":"Only existing Managed enrollments can continue. This wizard cannot purchase or register a new Managed domain."});
+    var existing=ReadState()["url"]?.GetValue<string>()??"";
+    if(String.IsNullOrWhiteSpace(existing)){
+     try{existing=JsonNode.Parse(File.ReadAllText(ConfigPath))?["publicUrl"]?.GetValue<string>()??"";}catch{}
+    }
+    domainBox=new TextBox{Width=560,Text=existing};
+    body.Controls.Add(domainBox);
+    if(choice=="external"){
+     body.Controls.Add(new Label{Width=570,Height=65,Text="Verification checks DNS, TLS, a local nonce challenge, OAuth issuer and MCP resource metadata. The next page is locked until verification passes."});
+    }else{
+     domainBox.ReadOnly=true;
+     body.Controls.Add(new Label{Width=570,Height=65,Text="An existing Managed domain and local Host identity are required. Confirm that the Managed tunnel is active before registering a Passkey."});
+    }
+   }else{
+    body.Controls.Add(new Label{Width=570,Height=75,Text="The public HTTPS domain is configured. Scan the QR code to register a trusted device. You cannot finish until the Host reports a registered Passkey."});
+    var qr=new Button{Text="Open Passkey Setup QR",Width=225,Height=40};
+    qr.Click+=async (_,_)=>await OpenPasskeySetup();
+    body.Controls.Add(qr);
+    body.Controls.Add(new Label{Width=570,Height=60,Text="After registering successfully in the browser, click Verify registration and Finish."});
+   }
+  }
+  back.Click+=(_,_)=>{if(busy)return;step=Math.Max(0,step-1);ShowStep();};
+  next.Click+=async (_,_)=>{
+   if(busy)return;
+   SetBusy(true);
+   try{
+    if(step==0){
+     if(!Running)Start();
+     if(choice=="managed" && !File.Exists(ConfigPath))throw new Exception("Managed enrollment is not configured on this computer.");
+     step=1;ShowStep();
+    }else if(step==1){
+     var origin=domainBox?.Text.Trim()??"";
+     if(choice=="external"){
+      if(!Uri.TryCreate(origin,UriKind.Absolute,out var uri)||uri.Scheme!="https"||uri.AbsolutePath!="/"||uri.Query.Length>0||uri.Fragment.Length>0)throw new Exception("Enter a bare HTTPS origin such as https://mcp.example.com");
+      var current=ReadState()["url"]?.GetValue<string>()??"";
+      if(!String.Equals(current,origin,StringComparison.OrdinalIgnoreCase)){
+       // SaveHostname is the existing domain-rebind implementation. Do not alter
+       // user configuration if they cancel its explicit confirmation dialog.
+       hostnameBox=domainBox;
+       SaveHostname();
+       hostnameBox=null;
+      }
+      var saved=ReadState()["url"]?.GetValue<string>()??"";
+      if(!String.Equals(saved,origin,StringComparison.OrdinalIgnoreCase))throw new Exception("Domain binding was not completed.");
+      await VerifyByotConnection();
+     }else{
+      var config=JsonNode.Parse(await File.ReadAllTextAsync(ConfigPath));
+      var existing=config?["publicUrl"]?.GetValue<string>()??"";
+      if(!existing.StartsWith("https://")||!String.Equals(existing,origin,StringComparison.OrdinalIgnoreCase))throw new Exception("No matching Managed HTTPS enrollment found.");
+     }
+     var status=await ReadWizardStatus();
+     if(!status.hasOrigin)throw new Exception("Local Host has not published a valid HTTPS origin.");
+     step=2;ShowStep();message.Text="Tunnel configuration checked. Register your Passkey.";
+    }else{
+     var status=await ReadWizardStatus();
+     if(!status.hasOrigin||status.passkeys<1)throw new Exception("First Passkey registration is not complete yet. Open QR, register, then verify again.");
+     await File.WriteAllTextAsync(Path.Combine(dir,"setup-complete.marker"),DateTimeOffset.UtcNow.ToString("O"));
+     form.Close();OpenSettings();
+    }
+   }catch(Exception ex){message.Text=ex.Message;MessageBox.Show(ex.Message,"HomeMCP Setup",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
+   finally{SetBusy(false);}
+  };
+  ShowStep();
+  form.FormClosed+=(_,_)=>{if(settings==form)settings=null;hostnameBox=null;};
   form.Show();
  }
  async Task PipeLoop(CancellationToken cancellation){
