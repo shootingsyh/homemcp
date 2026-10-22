@@ -23,6 +23,25 @@ jobs:
       - name: Compile Windows tray manager
         shell: pwsh
         run: dotnet build .\native\Manager\Manager.csproj -c Release
+      - name: Smoke-test real WinForms Manager UI (no Host or network)
+        shell: pwsh
+        run: |
+          $exe=(Get-ChildItem '.\\native\\Manager\\bin\\Release' -Recurse -Filter 'HomeMCP.Manager.exe' | Select-Object -First 1).FullName
+          if (!$exe) { throw 'WinForms Manager binary missing' }
+          $marker=Join-Path $env:RUNNER_TEMP 'homemcp-windows-ui-ready.txt'
+          $env:HOMEMCP_UI_SMOKE='1'
+          $env:HOMEMCP_UI_SMOKE_MARKER=$marker
+          $process=Start-Process -FilePath $exe -PassThru
+          try {
+            if (!$process.WaitForExit(15000)) { throw 'WinForms smoke test timed out' }
+            if (!(Test-Path $marker)) { throw 'WinForms Manager UI failed to open' }
+            if ((Get-Content $marker -Raw) -notmatch 'HOMEMCP_UI_READY') { throw 'WinForms UI verification failed' }
+            Write-Host 'WINDOWS_WINFORMS_SMOKE_OK'
+          } finally {
+            if (!$process.HasExited) { Stop-Process -Id $process.Id -Force }
+            Remove-Item Env:HOMEMCP_UI_SMOKE -ErrorAction SilentlyContinue
+            Remove-Item Env:HOMEMCP_UI_SMOKE_MARKER -ErrorAction SilentlyContinue
+          }
       - name: Build private runtime payload
         shell: pwsh
         run: .\packaging\build-payload.ps1
