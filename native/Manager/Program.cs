@@ -62,7 +62,7 @@ sealed class TrayContext : ApplicationContext {
   if(Environment.GetEnvironmentVariable("HOMEMCP_UI_SMOKE")=="1"){
    // Real WinForms startup/layout check in an isolated CI runner: no Host, relay,
    // credentials or monitoring are started.
-   OpenSettings();
+   OpenSetupWizard();
    var probe=new System.Windows.Forms.Timer{Interval=500};
    probe.Tick+=(_,_)=>{
     probe.Stop();
@@ -71,7 +71,9 @@ sealed class TrayContext : ApplicationContext {
      var controls=new System.Collections.Generic.List<Control>();
      void Collect(Control root){controls.Add(root);foreach(Control child in root.Controls)Collect(child);}
      Collect(settings);
-     if(!controls.OfType<Button>().Any())throw new Exception("manager_ui_buttons_missing");
+     if(!controls.OfType<Button>().Any(x=>x.Text=="Continue"))throw new Exception("wizard_continue_missing");
+     if(!controls.OfType<Label>().Any(x=>x.Text.Contains("Choose connection")))throw new Exception("wizard_first_page_missing");
+     if(controls.OfType<Button>().Any(x=>x.Text.Contains("Passkey")||x.Text.Contains("Finish")))throw new Exception("wizard_future_steps_leaked");
      var marker=Environment.GetEnvironmentVariable("HOMEMCP_UI_SMOKE_MARKER");
      if(!String.IsNullOrEmpty(marker))File.WriteAllText(marker,"HOMEMCP_UI_READY");
     }catch(Exception e){Environment.ExitCode=1;Console.Error.WriteLine(e);}
