@@ -17,10 +17,19 @@ mkdir -p "$RESOURCES"
 # An independently signed production distribution must bundle a pinned Node runtime.
 cp -R "$ROOT/src" "$ROOT/scripts" "$ROOT/web" "$ROOT/native/macos" "$RESOURCES/"
 cp "$ROOT/package.json" "$ROOT/package-lock.json" "$RESOURCES/"
+# Pin the runtime used by CI so the GUI cannot select an obsolete system Node.
+NODE_BIN=$(command -v node)
+node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)'
+mkdir -p "$RESOURCES/runtime"
+cp -L "$NODE_BIN" "$RESOURCES/runtime/node"
+chmod 755 "$RESOURCES/runtime/node"
 if [ -d "$ROOT/node_modules" ]; then cp -R "$ROOT/node_modules" "$RESOURCES/"; fi
 if [ -d "$ROOT/build/macos-worker" ]; then
   mkdir -p "$RESOURCES/build"
   cp -R "$ROOT/build/macos-worker" "$RESOURCES/build/"
 fi
-pkgbuild --root "$PAYLOAD" --identifier "si.homemcp.client" --version "$VERSION" "$DEST/HomeMCP-unsigned.pkg"
+mkdir -p "$DEST/pkg-scripts"
+cp "$ROOT/scripts/macos/postinstall.sh" "$DEST/pkg-scripts/postinstall"
+chmod 755 "$DEST/pkg-scripts/postinstall"
+pkgbuild --scripts "$DEST/pkg-scripts" --root "$PAYLOAD" --identifier "si.homemcp.client" --version "$VERSION" "$DEST/HomeMCP-unsigned.pkg"
 echo "Unsigned development package: $DEST/HomeMCP-unsigned.pkg (NOT release ready)"
