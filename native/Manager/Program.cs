@@ -101,7 +101,7 @@ sealed class TrayContext : ApplicationContext {
   lines.Add("Process supervision: Windows Job Object");
   lines.Add("PowerShell: "+(File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe"))?"Available":"MISSING"));
   lines.Add("Playwright worker: "+(File.Exists(Path.Combine(app,"workers","playwright","cli.mjs"))?"Installed":"MISSING"));
-  lines.Add("Desktop worker: "+(File.Exists(Path.Combine(app,"workers","windows-mcp.exe"))?"Installed":"MISSING"));
+  lines.Add("Desktop worker: "+(File.Exists(Path.Combine(app,"workers","windows-mcp","python.exe"))?"Installed":"MISSING"));
   lines.Add("Host configuration: "+(File.Exists(ConfigPath)?"Created":"Not created (generated on start)"));
   lines.Add("Network: "+(ReadState()["remoteEnabled"]?.GetValue<bool>()==true?"Remote requested":"Local only (safe default)"));
   lines.Add("Oracle tunnel: "+(oracleTunnelStarted?FrpTunnel.Status():"Not configured / stopped"));
@@ -262,6 +262,31 @@ sealed class TrayContext : ApplicationContext {
    if(settings is {IsHandleCreated:true})settings.BeginInvoke((Action)(()=>MessageBox.Show("Host did not become healthy. Check startup-errors.log; setup remains incomplete.","HomeMCP setup")));
   });
  }
+ void MigratePackagedDesktopWorker(){
+  // Preserve user-customized workers. Upgrade only the old HomeMCP PyInstaller path.
+  if(!File.Exists(ConfigPath))return;
+  var bundled=Path.Combine(app,"workers","windows-mcp","python.exe");
+  if(!File.Exists(bundled))return;
+  var data=JsonNode.Parse(File.ReadAllText(ConfigPath)) as JsonObject;
+  if(data?["workers"] is not JsonArray workers)return;
+  var changed=false;
+  foreach(var entry in workers){
+   if(entry is not JsonObject worker || worker["name"]?.GetValue<string>()!="desktop")continue;
+   var old=worker["command"]?.GetValue<string>()??"";
+   if(!old.EndsWith(@"\\workers\\windows-mcp.exe",StringComparison.OrdinalIgnoreCase))continue;
+   worker["command"]=bundled;
+   var args=worker["args"] as JsonArray;
+   var next=new JsonArray("-m","windows_mcp");
+   if(args!=null)foreach(var arg in args)next.Add(arg?.DeepClone());
+   worker["args"]=next;
+   changed=true;
+  }
+  if(!changed)return;
+  File.Copy(ConfigPath,ConfigPath+".before-python-worker",true);
+  var tmp=ConfigPath+".worker-migrate.tmp";
+  File.WriteAllText(tmp,data!.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));
+  File.Move(tmp,ConfigPath,true);
+ }
  void Start(){
   if(Running)return;
   try{
@@ -277,6 +302,7 @@ sealed class TrayContext : ApplicationContext {
      if(!process.WaitForExit(30000)||process.ExitCode!=0||!File.Exists(ConfigPath))
        throw new InvalidOperationException("Initial configuration provisioning failed");
    }
+   MigratePackagedDesktopWorker();
    var startInfo=new ProcessStartInfo(node){
     UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=app,
    };
