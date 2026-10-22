@@ -5,7 +5,24 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
+  prepare-release:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create private-repository developer pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: macos-dev-${{ github.run_id }}
+        run: |
+          gh release create "$TAG" --target "${{ github.sha }}" --prerelease \
+            --title "HomeMCP macOS development build ${{ github.run_id }}" \
+            --notes "Unsigned development binaries for installation testing only. Not notarized; local Node runtime and installer lifecycle still require work."
+
   macos:
     strategy:
       fail-fast: false
@@ -34,12 +51,12 @@ jobs:
         run: sh scripts/macos/build-manager.sh
       - name: Build unsigned developer package
         run: sh scripts/macos/package.sh
-      - name: Upload test package
-        uses: actions/upload-artifact@v4
-        with:
-          name: homemcp-${{ matrix.runner }}-unsigned
-          path: |
-            build/macos-dist/HomeMCP-unsigned.pkg
-            build/macos-manager/HomeMCP Manager.app
-          if-no-files-found: error
-          retention-days: 14
+      - name: Upload package to GitHub pre-release (not Actions Artifacts)
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: macos-dev-${{ github.run_id }}
+        run: |
+          cp build/macos-dist/HomeMCP-unsigned.pkg "HomeMCP-${{ matrix.runner }}-unsigned.pkg"
+          gh release upload "$TAG" "HomeMCP-${{ matrix.runner }}-unsigned.pkg" --clobber
