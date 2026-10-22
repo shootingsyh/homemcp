@@ -58,7 +58,11 @@ jobs:
           $p=Start-Process msiexec.exe -ArgumentList @('/i', ('"'+$msi+'"'), '/qn','/norestart','/l*v',"$env:TEMP\homemcp-msi.log") -Wait -PassThru
           if ($p.ExitCode -ne 0) { Get-Content "$env:TEMP\homemcp-msi.log" -Tail 80; throw "MSI install failed $($p.ExitCode)" }
           & "$env:LOCALAPPDATA\HomeMCP\app\runtime\node.exe" --version
-          & "$env:LOCALAPPDATA\HomeMCP\app\workers\windows-mcp.exe" --help
+          $python="$env:LOCALAPPDATA\HomeMCP\app\workers\windows-mcp\python.exe"
+          & $python -c "import windows_mcp; print('WINDOWS_MCP_IMPORT_OK')"
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled Windows-MCP import failed' }
+          & $python -m windows_mcp --help
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled Windows-MCP CLI failed' }
           & "$env:LOCALAPPDATA\HomeMCP\app\runtime\node.exe" "$env:LOCALAPPDATA\HomeMCP\app\workers\playwright\cli.mjs" --help
       - name: Test installed provisioning on Windows PowerShell 5.1
         shell: pwsh
