@@ -23,7 +23,7 @@ const invokeSocket=input=>new Promise((resolve,reject)=>{
  const socket=net.createConnection(socketPath);
  const timer=setTimeout(()=>{socket.destroy();finish(Error('desktop_service_timeout'))},25000);
  function finish(error,value){if(done)return;done=true;clearTimeout(timer);if(error)reject(error);else resolve(value)}
- socket.on('connect',()=>socket.end(input+'\\n'));
+ socket.on('connect',()=>socket.end(input+String.fromCharCode(10)));
  socket.on('data',d=>{out+=d.toString('utf8');if(out.length>24*1024*1024){socket.destroy();finish(Error('desktop_service_output_too_large'))}});
  socket.on('end',()=>finish(null,out));
  socket.on('error',e=>finish(Error('desktop_service_unavailable: '+e.code)));
