@@ -8,7 +8,7 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {loadSecret,saveSecret} from '../../src/tunnel-store.mjs';
 import {TunnelClient,validateClaim} from '../../src/tunnel-client.mjs';
-import {frpBootstrapToken} from '../../src/frp-bootstrap.mjs';
+import {frpBootstrapToken,configuredFrpOverride} from '../../src/frp-bootstrap.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const base=process.env.HOMEMCP_HOME||path.join(os.homedir(),'Library','Application Support','HomeMCP');
 const configFile=path.join(base,'config.json');
@@ -45,7 +45,7 @@ try{
   else{saveSecret('credential',credential);console.log(JSON.stringify({claimed:true,origin:domain(credential)}));}
  }else if(action==='activate'){
   const credential=loadSecret('credential');if(!credential)throw Error('claim_first');
-  frpBootstrapToken(credential,{override:process.env.HOMEMCP_FRP_BOOTSTRAP_OVERRIDE});
+  frpBootstrapToken(credential,{override:configuredFrpOverride()});
   const candidates=[process.env.HOMEMCP_FRPC_BIN,path.join(root,'runtime','frpc'),'/opt/homebrew/bin/frpc','/usr/local/bin/frpc'].filter(Boolean);
   const frpc=candidates.find(f=>fs.existsSync(f));
   if(!frpc)throw Error('frpc_binary_missing_install_frpc_first');
