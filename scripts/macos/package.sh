@@ -25,6 +25,13 @@ node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)'
 mkdir -p "$RESOURCES/runtime"
 cp -L "$NODE_BIN" "$RESOURCES/runtime/node"
 chmod 755 "$RESOURCES/runtime/node"
+# Bundle a preinstalled FRP client for Managed tunnel mode when available.
+# Do not download or build FRP during packaging.
+FRPC_BIN=$(command -v frpc 2>/dev/null || true)
+if [ -n "$FRPC_BIN" ]; then
+  cp -L "$FRPC_BIN" "$RESOURCES/runtime/frpc"
+  chmod 755 "$RESOURCES/runtime/frpc"
+fi
 # Fail the build if the packaged runtime cannot parse the exact scripts shipped.
 "$RESOURCES/runtime/node" --check "$RESOURCES/scripts/macos/setup.mjs"
 "$RESOURCES/runtime/node" --check "$RESOURCES/scripts/macos/provision.mjs"
