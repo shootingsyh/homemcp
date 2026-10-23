@@ -18,6 +18,8 @@ mkdir -p "$RESOURCES"
 cp -R "$ROOT/src" "$ROOT/scripts" "$ROOT/web" "$RESOURCES/"
 mkdir -p "$RESOURCES/native"
 cp -R "$ROOT/native/macos" "$RESOURCES/native/"
+cp "$ROOT/build/macos-keychain/home-mcp-keychain" "$RESOURCES/native/macos/home-mcp-keychain"
+chmod 755 "$RESOURCES/native/macos/home-mcp-keychain"
 cp "$ROOT/package.json" "$ROOT/package-lock.json" "$RESOURCES/"
 # Pin the runtime used by CI so the GUI cannot select an obsolete system Node.
 NODE_BIN=$(command -v node)
