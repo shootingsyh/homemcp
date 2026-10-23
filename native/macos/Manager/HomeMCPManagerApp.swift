@@ -115,12 +115,14 @@ struct SetupView: View {
                     }
                 }
             } else {
-                Text("Register your first Passkey").font(.title2)
-                Text("Open the QR code and register a trusted phone or computer. Finish becomes available only after HomeMCP verifies a registered Passkey.")
+                Text("Connect your phone").font(.title2)
+                Text("Scan the setup QR code with your phone and create a Passkey. HomeMCP will verify the connection before finishing.")
                     .foregroundStyle(.secondary)
                 HStack {
-                    Button("Open Setup QR") { runScript("passkey-link.mjs", [], openURL: true) }
-                    Button("I've registered — Verify") { checkWizard(advance: true) }
+                    Button("Show connection QR code") { runScript("passkey-link.mjs", [], openURL: true) }
+                        .buttonStyle(.borderedProminent).controlSize(.large)
+                    Button("Verify connection") { checkWizard(advance: true) }
+                        .controlSize(.large)
                 }.disabled(running)
                 Button("Back") { step = 1 }
             }
@@ -129,6 +131,12 @@ struct SetupView: View {
                 .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(24)
+        .onChange(of: step) { _, newStep in
+            if newStep == 2 && !completed &&
+               ProcessInfo.processInfo.environment["HOMEMCP_UI_SMOKE"] != "1" {
+                runScript("passkey-link.mjs", [], openURL: true)
+            }
+        }
         .onAppear {
             if ProcessInfo.processInfo.environment["HOMEMCP_UI_SMOKE"] == "1" {
                 // Exercise the actual SwiftUI WindowGroup/view layout without real tunnel,
@@ -152,8 +160,9 @@ struct SetupView: View {
             Text("Your HomeMCP is configured").font(.title2)
             HStack {
                 Button("Check Status") { checkWizard(advance: false) }
-                Button("Add / Manage Passkeys") { openLocal("/passkeys") }
-                Button("New Device QR") { runScript("passkey-link.mjs", [], openURL: true) }
+                Button("Connect another device") { runScript("passkey-link.mjs", [], openURL: true) }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                Button("Manage devices") { openLocal("/passkeys") }
             }.disabled(running)
             Button("Restart local Host") { runScript("setup.mjs", ["restore"]) }
                 .disabled(running)
