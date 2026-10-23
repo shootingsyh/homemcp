@@ -5,9 +5,6 @@ const state=loadSecret('enrollment')||loadPublic('enrollment')||{};
 const existing=loadSecret('credential');const client=new TunnelClient({token:existing?.token});
 async function main(){
  switch(command){
- case 'bootstrap':{
-  const chunks=[];for await(const ch of process.stdin)chunks.push(ch);const token=Buffer.concat(chunks).toString('utf8').trim();if(token.length<20)throw Error('invalid_bootstrap_length');saveSecret('frp-bootstrap',{token});console.log('FRP_BOOTSTRAP_STORED');break;
- }
  case 'enroll':{
   if(state.id)throw Error('existing_enrollment_use_claim_or_reset');
   const username=process.argv[3]||'clientdev';const plan=process.argv[4]||'monthly';
