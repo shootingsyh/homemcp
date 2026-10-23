@@ -7,7 +7,10 @@ IDENTITY=${HOMEMCP_CODESIGN_IDENTITY:--} # dash = ad-hoc signing (development on
 RES="$APP/Contents/Resources/HomeMCP"
 sign_one() {
   [ -f "$1" ] || { echo "Missing executable $1" >&2; exit 1; }
-  /usr/bin/codesign --force --sign "$IDENTITY" --options runtime "$1"
+  case "$1" in
+    */runtime/node) /usr/bin/codesign --force --sign "$IDENTITY" "$1" ;;
+    *) /usr/bin/codesign --force --sign "$IDENTITY" --options runtime "$1" ;;
+  esac
   /usr/bin/codesign --verify --strict --verbose=2 "$1"
 }
 # Sign embedded libraries and executable Mach-O binaries, including Playwright dependencies.
