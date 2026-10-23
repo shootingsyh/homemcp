@@ -1,1 +1,22 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HomeMCP Trusted Devices</title><style>body{font:16px system-ui;max-width:750px;margin:3rem auto;padding:1rem}button{padding:.65rem;margin:.4rem}li{padding:.5rem}pre{overflow-wrap:anywhere}</style><h1>HomeMCP Trusted Devices</h1><p>Each trusted phone or computer can have its own Passkey for this HomeMCP. To add a device, verify with an existing Passkey, then create a Passkey on the new device. These two security checks are part of one enrollment flow.</p><button id="login">Sign in</button><button id="add">Add Trusted Device</button><button id="refresh">Refresh</button><p id="status" role="status"></p><ul id="items"></ul><script src="/passkeys.js" defer></script></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connect a device · HomeMCP</title>
+<style>
+:root{color-scheme:light dark}body{font:17px/1.5 system-ui,-apple-system,sans-serif;max-width:520px;margin:0 auto;padding:clamp(24px,7vw,64px) 22px}
+h1{font-size:clamp(26px,5vw,34px);letter-spacing:-.03em;margin:0 0 12px}p{color:CanvasText;opacity:.8}
+button{font:inherit;cursor:pointer;border-radius:12px;min-height:52px;padding:12px 20px}
+#add{background:#1765d1;color:white;border:0;font-weight:650;width:100%;font-size:19px;margin:22px 0 12px}
+#login{background:transparent;border:1px solid #9999;width:100%}
+button:disabled{opacity:.5;cursor:wait}#status{min-height:24px}#devices{margin-top:20px}li{padding:8px 0}li button{min-height:36px;font-size:14px}
+</style>
+</head><body>
+<h1>Connect your phone</h1>
+<p>Connect a phone or another computer to HomeMCP. Confirm with an existing trusted device, then follow the invitation link.</p>
+<button id="add" type="button">Connect a new device</button>
+<button id="login" type="button">Manage connected devices</button>
+<p id="status" role="status" aria-live="polite"></p>
+<section id="devices" hidden><h2>Connected devices</h2><ul id="items"></ul></section>
+<script src="/passkeys.js" defer></script>
+</body></html>
