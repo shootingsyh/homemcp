@@ -68,7 +68,7 @@ struct SetupView: View {
             } else if step == 1 {
                 if mode == "managed" {
                     Text("Activate HomeMCP Managed").font(.title2)
-                    Text("Existing enrollment? Select Check Claim. New enrollment may be billable and requires confirmation.")
+                    Text("Request enrollment once, then select Activate. The app will claim your account automatically when ready.")
                         .foregroundStyle(.secondary)
                     TextField("Desired subdomain username", text: $managedUser).textFieldStyle(.roundedBorder)
                     Picker("Plan", selection: $managedPlan) {
@@ -86,7 +86,7 @@ struct SetupView: View {
                                 runScript("managed-setup.mjs", ["enroll", managedUser, managedPlan])
                             }
                         }.disabled(running || managedUser.isEmpty)
-                        Button("Check Claim") {
+                        Button("Check enrollment status") {
                             runScript("managed-setup.mjs", ["claim"])
                         }.disabled(running)
                     }
@@ -100,7 +100,7 @@ struct SetupView: View {
                                 }
                                 step = 2
                             }
-                        }.disabled(running)
+                        }.buttonStyle(.borderedProminent).controlSize(.large).disabled(running)
                     }
                 } else {
                     Text("Connect and verify your tunnel").font(.title2)
