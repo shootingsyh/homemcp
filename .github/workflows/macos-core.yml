@@ -1,8 +1,5 @@
 name: macOS developer build
 on:
-  push:
-    branches: [main, integration/macos-ci-20261021]
-  pull_request:
   workflow_dispatch:
 
 permissions:
