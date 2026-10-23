@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import ScreenCaptureKit
 
 func send(_ result: [String:Any]) {
     if let data = try? JSONSerialization.data(withJSONObject: result),
@@ -10,15 +11,29 @@ func send(_ result: [String:Any]) {
 func check() -> [String:Any] {
     ["accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess()]
 }
-func execute(_ req:[String:Any]) -> [String:Any] {
+func execute(_ req:[String:Any]) async -> [String:Any] {
     let name=req["tool"] as? String ?? ""
     let args=req["arguments"] as? [String:Any] ?? [:]
     if name=="desktop_permissions" { return check() }
     if name=="desktop_screenshot" {
         guard CGPreflightScreenCaptureAccess() else {return ["error":"screen_recording_permission_required"]}
-        guard let img=CGDisplayCreateImage(CGMainDisplayID()),
-              let data=NSBitmapImageRep(cgImage:img).representation(using:.png,properties:[:]) else {return ["error":"capture_failed"]}
-        return ["mime_type":"image/png","image_base64":data.base64EncodedString(),"width":img.width,"height":img.height]
+        guard #available(macOS 14.0, *) else { return ["error":"screenshot_requires_macos_14"] }
+        do {
+            let content = try await SCShareableContent.current
+            guard let display = content.displays.first else { return ["error":"no_display"] }
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let configuration = SCStreamConfiguration()
+            configuration.width = display.width
+            configuration.height = display.height
+            configuration.showsCursor = false
+            let img = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+            guard let data = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) else {
+                return ["error":"capture_encoding_failed"]
+            }
+            return ["mime_type":"image/png","image_base64":data.base64EncodedString(),"width":img.width,"height":img.height]
+        } catch {
+            return ["error":"capture_failed","detail":String(describing: error)]
+        }
     }
     guard AXIsProcessTrusted() else {return ["error":"accessibility_permission_required"]}
     if name=="desktop_snapshot" {
@@ -44,8 +59,8 @@ func execute(_ req:[String:Any]) -> [String:Any] {
     if name=="desktop_type" {
         guard let text=args["text"] as? String,text.utf16.count<=4096 else {return ["error":"invalid_text"]}
         let units=Array(text.utf16)
-        guard let down=CGEvent(keyboardEventSource:nil,virtualKey:0,isKeyDown:true),
-              let up=CGEvent(keyboardEventSource:nil,virtualKey:0,isKeyDown:false) else {return ["error":"event_creation_failed"]}
+        guard let down=CGEvent(keyboardEventSource:nil,virtualKey:0,keyDown:true),
+              let up=CGEvent(keyboardEventSource:nil,virtualKey:0,keyDown:false) else {return ["error":"event_creation_failed"]}
         down.keyboardSetUnicodeString(stringLength:units.count,unicodeString:units)
         up.keyboardSetUnicodeString(stringLength:units.count,unicodeString:units)
         down.post(tap:.cghidEventTap);up.post(tap:.cghidEventTap)
@@ -69,14 +84,20 @@ func execute(_ req:[String:Any]) -> [String:Any] {
             default:return ["error":"invalid_modifier"]
             }
         }
-        guard let down=CGEvent(keyboardEventSource:nil,virtualKey:CGKeyCode(key),isKeyDown:true),
-              let up=CGEvent(keyboardEventSource:nil,virtualKey:CGKeyCode(key),isKeyDown:false) else {return ["error":"event_creation_failed"]}
+        guard let down=CGEvent(keyboardEventSource:nil,virtualKey:CGKeyCode(key),keyDown:true),
+              let up=CGEvent(keyboardEventSource:nil,virtualKey:CGKeyCode(key),keyDown:false) else {return ["error":"event_creation_failed"]}
         down.flags=flags;up.flags=flags;down.post(tap:.cghidEventTap);up.post(tap:.cghidEventTap)
         return ["ok":true]
     }
     return ["error":"unknown_tool"]
 }
-let data=FileHandle.standardInput.readDataToEndOfFile()
-if let input=try? JSONSerialization.jsonObject(with:data) as? [String:Any] {
-    send(execute(input))
-} else { send(["error":"invalid_request"]) }
+let data = FileHandle.standardInput.readDataToEndOfFile()
+if let input = try? JSONSerialization.jsonObject(with: data) as? [String:Any] {
+    Task {
+        send(await execute(input))
+        exit(0)
+    }
+    dispatchMain()
+} else {
+    send(["error":"invalid_request"])
+}
