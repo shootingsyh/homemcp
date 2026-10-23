@@ -23,7 +23,6 @@ struct SetupView: View {
     @State private var domain = ""
     @State private var managedUser = ""
     @State private var managedPlan = "monthly"
-    @State private var bootstrapToken = ""
     @State private var feedback = "Welcome. Your existing device data will be preserved."
     @State private var running = false
 
@@ -91,13 +90,6 @@ struct SetupView: View {
                             runScript("managed-setup.mjs", ["claim"])
                         }.disabled(running)
                     }
-                    SecureField("FRP bootstrap token (provided by your HomeMCP service)", text: $bootstrapToken)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Save Bootstrap Token") {
-                        runScript("managed-setup.mjs", ["bootstrap"], stdin: bootstrapToken) { _, _ in
-                            bootstrapToken = ""
-                        }
-                    }.disabled(running || bootstrapToken.isEmpty)
                     HStack {
                         Button("Back") { step = 0 }
                         Button("Activate Tunnel and Continue") {
