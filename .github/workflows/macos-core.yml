@@ -18,7 +18,7 @@ jobs:
         run: |
           gh release create "$TAG" --target "${{ github.sha }}" --prerelease \
             --title "HomeMCP macOS development build ${{ github.run_id }}" \
-            --notes "Unsigned development binaries for installation testing only. Not notarized; local Node runtime and installer lifecycle still require work."
+            --notes "Ad-hoc signed test binaries; not notarized or intended for public distribution."
 
   macos:
     strategy:
@@ -71,7 +71,7 @@ jobs:
             wait "$PID" || true
             echo "MACOS_SWIFTUI_PAGE_OK:$page"
           done
-      - name: Build unsigned developer package
+      - name: Build ad-hoc signed developer package
         run: sh scripts/macos/package.sh
       - name: Upload package to GitHub pre-release (not Actions Artifacts)
         if: github.event_name != 'pull_request'
@@ -80,5 +80,5 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: macos-dev-${{ github.run_id }}
         run: |
-          cp build/macos-dist/HomeMCP-unsigned.pkg "HomeMCP-${{ matrix.runner }}-unsigned.pkg"
-          gh release upload "$TAG" "HomeMCP-${{ matrix.runner }}-unsigned.pkg" --clobber
+          cp build/macos-dist/HomeMCP-signed-app.pkg "HomeMCP-${{ matrix.runner }}-adhoc.pkg"
+          gh release upload "$TAG" "HomeMCP-${{ matrix.runner }}-adhoc.pkg" --clobber
