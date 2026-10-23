@@ -207,10 +207,12 @@ struct SetupView: View {
             }.disabled(running)
             Divider()
             Text("Desktop control permissions").font(.headline)
-            Text("Accessibility and Screen Recording must be granted to the actual desktop automation helper, not just HomeMCP Manager. The helper is optional and is not yet configured on every Mac.")
+            Text("Screen capture needs macOS permission for the process that runs HomeMCP.Desktop. Request access below; macOS may require enabling the listed component in System Settings and restarting the Host.")
                 .font(.footnote).foregroundStyle(.secondary)
             HStack {
                 Button("Accessibility Settings") { openPrivacySettings("Privacy_Accessibility") }
+                Button("Request Screen Recording") { requestDesktopScreenRecording() }
+                    .disabled(running)
                 Button("Screen Recording Settings") { openPrivacySettings("Privacy_ScreenCapture") }
             }
             Button("Restart local Host") { runScript("setup.mjs", ["restore"]) }
@@ -227,6 +229,34 @@ struct SetupView: View {
                     step = 0
                     feedback = "Wizard restarted. Existing local data was not deleted."
                 }
+            }
+        }
+    }
+
+    private func requestDesktopScreenRecording() {
+        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/HomeMCP.Desktop").path
+        guard FileManager.default.isExecutableFile(atPath: helper) else {
+            feedback = "Desktop Helper is missing from this installation. Rebuild and reinstall HomeMCP."
+            return
+        }
+        running = true
+        feedback = "Requesting Screen Recording access for HomeMCP.Desktop…"
+        Task {
+            let result = await Task.detached {
+                ScriptRunner.execute(helper, [], stdin: "{\\"tool\\":\\"desktop_request_screen_recording\\"}")
+            }.value
+            running = false
+            guard result.code == 0,
+                  let data = result.output.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                feedback = "Permission helper failed: " + result.output
+                return
+            }
+            if json["screen_recording"] as? Bool == true {
+                feedback = "Screen Recording is allowed for this request. Test desktop_screenshot through the Host."
+            } else {
+                feedback = "Screen Recording not yet enabled. Check the macOS permission prompt and System Settings; enable the HomeMCP component shown there. Restart the Host if required."
+                openPrivacySettings("Privacy_ScreenCapture")
             }
         }
     }
