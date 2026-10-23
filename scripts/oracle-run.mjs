@@ -1,8 +1,8 @@
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';
-import {loadSecret,dataPath} from '../src/tunnel-store.mjs';import {frpBootstrapToken} from '../src/frp-bootstrap.mjs';import {startTunnelHTTPS} from '../src/tunnel-https.mjs';
+import {loadSecret,dataPath} from '../src/tunnel-store.mjs';import {frpBootstrapToken,configuredFrpOverride} from '../src/frp-bootstrap.mjs';import {startTunnelHTTPS} from '../src/tunnel-https.mjs';
 const credential=loadSecret('credential');if(!credential)throw Error('claim_first');
 // Public official handshake constant; custom frps may override through settings.
-const bootstrap=credential?frpBootstrapToken(credential,{override:process.env.HOMEMCP_FRP_BOOTSTRAP_OVERRIDE}):null;
+const bootstrap=credential?frpBootstrapToken(credential,{override:configuredFrpOverride()}):null;
 const command=process.argv[2]||'gateway';const certMode=process.argv.includes('--staging')?'staging':'production';
 if(command==='gateway'){
  const cert=fs.readFileSync(path.join(dataPath(),'cert-'+certMode,'fullchain.pem'));
