@@ -1,9 +1,18 @@
 import readline from 'node:readline';
-import {execFile} from 'node:child_process';
-import {promisify} from 'node:util';
+import {spawn} from 'node:child_process';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-const run=promisify(execFile);
+const invoke=(input)=>new Promise((resolve,reject)=>{
+ const child=spawn(binary,[],{stdio:['pipe','pipe','pipe'],shell:false});
+ let out='',ended=false;
+ const stop=(error,result)=>{if(ended)return;ended=true;clearTimeout(timer);if(error)reject(error);else resolve(result)};
+ const timer=setTimeout(()=>{child.kill('SIGKILL');stop(Error('desktop_helper_timeout'))},20000);
+ child.stdout.on('data',data=>{out+=data.toString();if(out.length>24*1024*1024){child.kill('SIGKILL');stop(Error('desktop_helper_output_too_large'))}});
+ child.stderr.on('data',()=>{});
+ child.on('error',e=>stop(e));
+ child.on('close',code=>code===0?stop(null,out):stop(Error('desktop_helper_failed_'+code)));
+ child.stdin.end(input);
+});
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const binary=process.env.HOMEMCP_MAC_DESKTOP_HELPER||path.join(root,'native','macos','home-mcp-desktop');
 const definitions=[
@@ -28,8 +37,7 @@ for await(const line of readline.createInterface({input:process.stdin,crlfDelay:
    const name=request.params?.name;
    if(!definitions.some(d=>d[0]===name))throw Error('unknown_tool');
    const input=JSON.stringify({tool:name,arguments:request.params?.arguments||{}});
-   const {stdout}=await run(binary,[],{input,timeout:20000,maxBuffer:24*1024*1024});
-   const result=JSON.parse(stdout);
+   const result=JSON.parse(await invoke(input));
    if(result.error)throw Error(result.error);
    reply(request.id,{content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result});
   }else error(request.id,'method_not_found');
