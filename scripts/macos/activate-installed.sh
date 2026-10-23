@@ -12,6 +12,7 @@ mkdir -p "$AGENTS" "$LOGS"
 chmod 700 "$LOGS"
 # Provision only when absent; preserve existing config, Passkeys and credentials.
 "$NODE" "$ROOT/scripts/macos/provision.mjs"
+"$NODE" "$ROOT/scripts/macos/upgrade-tools.mjs"
 PLIST="$AGENTS/$LABEL.plist"
 HOMEMCP_APP_ROOT="$ROOT" HOMEMCP_NODE_PATH="$NODE" HOMEMCP_PLIST_PATH="$PLIST" HOMEMCP_BASE_PATH="$BASE" "$NODE" "$ROOT/scripts/macos/write-launch-agent.mjs"
 chmod 600 "$PLIST"
