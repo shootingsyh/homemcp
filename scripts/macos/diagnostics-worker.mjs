@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Native macOS diagnostics and command worker. stdio MCP, no extra dependencies.
-// Commands are never enabled without the Host's Passkey 'ask' policy.
+// All tool execution is authorized by the shared Host allow/ask/deny policy. Mac shell defaults to allow, matching Windows PowerShell; users can change this policy.
 import os from 'node:os';
 import fs from 'node:fs';
 import {execFile} from 'node:child_process';
