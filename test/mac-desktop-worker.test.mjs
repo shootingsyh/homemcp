@@ -6,7 +6,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import readline from 'node:readline';
 
-test('mac desktop adapter discovers tools and returns screenshot as MCP image',async()=>{
+test('mac desktop adapter discovers tools and returns screenshot as MCP image',{skip:process.platform==='win32'?'POSIX executable mock requires Unix':false},async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'homemcp-mac-desktop-'));
  const mock=path.join(dir,'mock-helper');
  fs.writeFileSync(mock,'#!/usr/bin/env node\nlet s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{const req=JSON.parse(s);console.log(JSON.stringify(req.tool==="desktop_screenshot"?{image_base64:"aGVsbG8=",width:1,height:1}:{ok:true,tool:req.tool}))})\n',{mode:0o755});
