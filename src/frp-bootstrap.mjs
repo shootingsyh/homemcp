@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 // Public handshake constant for the official frps service. Not an access credential.
 // Per-user FRP authorization remains enforced by the server-side plugin.
 export const OFFICIAL_FRP_BOOTSTRAP_TOKEN='5c97e6ab60c9673ac984f127479b090b922b9c5337e2ecda306d10c44b838f6d';
@@ -21,4 +24,16 @@ export function renderFrpcConfig(credential,options={}){
   .replaceAll('{{ .Envs.HOMEMCP_FRP_TENANT }}',credential.token);
  if(config.includes('BOOTSTRAP_TOKEN_EMBEDDED_IN_HOMEMCP_APP')||!config.includes(credential.token))throw Error('frpc_config_render_failed');
  return config;
+}
+
+export function configuredFrpOverride(){
+ const base=process.env.HOMEMCP_HOME||
+  (process.platform==='darwin'?path.join(os.homedir(),'Library','Application Support','HomeMCP'):
+   path.join(process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData','Local'),'HomeMCP'));
+ let setting;
+ try {
+  const config=JSON.parse(fs.readFileSync(path.join(base,'config.json'),'utf8').replace(/^\uFEFF/,''));
+  setting=config.frp?.bootstrapToken;
+ }catch{}
+ return process.env.HOMEMCP_FRP_BOOTSTRAP_OVERRIDE||setting;
 }
