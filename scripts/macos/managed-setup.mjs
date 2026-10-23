@@ -27,7 +27,7 @@ try{
  if(process.platform!=='darwin')throw Error('macos_required');
  if(action==='status'){
   const c=loadSecret('credential'),e=pending();
-  console.log(JSON.stringify({claimed:!!c,origin:c?domain(c):null,enrollmentPending:!!e,bootstrapReady:!!c}));
+  console.log(JSON.stringify({claimed:!!c,origin:c?domain(c):null,enrollmentPending:!!e}));
  }else if(action==='enroll'){
   // Starts an enrollment request that may require a paid subscription.
   // Caller must display explicit confirmation and collect username/plan.
