@@ -1,8 +1,6 @@
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';
 import {loadSecret,dataPath} from '../src/tunnel-store.mjs';import {frpBootstrapToken,configuredFrpOverride} from '../src/frp-bootstrap.mjs';import {startTunnelHTTPS} from '../src/tunnel-https.mjs';
 const credential=loadSecret('credential');if(!credential)throw Error('claim_first');
-// Public official handshake constant; custom frps may override through settings.
-const bootstrap=credential?frpBootstrapToken(credential,{override:configuredFrpOverride()}):null;
 const command=process.argv[2]||'gateway';const certMode=process.argv.includes('--staging')?'staging':'production';
 if(command==='gateway'){
  const cert=fs.readFileSync(path.join(dataPath(),'cert-'+certMode,'fullchain.pem'));
@@ -12,6 +10,7 @@ if(command==='gateway'){
  const server=startTunnelHTTPS({cert,key,targetPort:config.port,port:8443,activeOrigin:config.publicUrl});
  server.on('listening',()=>console.log('HOME_TUNNEL_TLS_GATEWAY_STARTED 127.0.0.1:8443'));
 } else if(command==='frpc'){
+ const bootstrap=frpBootstrapToken(credential,{override:configuredFrpOverride()});
  if(!bootstrap)throw Error('frp_bootstrap_unavailable');
  const app=path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/,'')),'..');const name=process.platform==='win32'?'frpc.exe':'frpc';const packaged=path.join(app,'runtime',name);const binary=process.env.HOMEMCP_FRPC_BIN||(fs.existsSync(packaged)?packaged:path.join(app,'vendor','frp',name));if(!fs.existsSync(binary))throw Error('frpc_binary_missing');
  const configText=credential.frpc_config.replaceAll('BOOTSTRAP_TOKEN_EMBEDDED_IN_HOMEMCP_APP','{{ .Envs.HOMEMCP_FRP_BOOTSTRAP }}').replaceAll(credential.token,'{{ .Envs.HOMEMCP_FRP_TENANT }}');
