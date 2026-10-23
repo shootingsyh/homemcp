@@ -15,8 +15,12 @@ func execute(_ req:[String:Any]) async -> [String:Any] {
     let name=req["tool"] as? String ?? ""
     let args=req["arguments"] as? [String:Any] ?? [:]
     if name=="desktop_permissions" { return check() }
+    if name=="desktop_request_screen_recording" {
+        let granted = CGRequestScreenCaptureAccess()
+        return ["screen_recording": granted, "permission_subject": "HomeMCP.Desktop", "restart_may_be_required": !granted]
+    }
     if name=="desktop_screenshot" {
-        guard CGPreflightScreenCaptureAccess() else {return ["error":"screen_recording_permission_required"]}
+        guard CGPreflightScreenCaptureAccess() else {return ["error":"screen_recording_permission_required","permission_subject":"HomeMCP.Desktop","next_step":"Use Request Screen Recording in HomeMCP Manager, then enable the displayed HomeMCP component in System Settings > Privacy & Security > Screen & System Audio Recording. Restart the Host if macOS asks."]}
         guard #available(macOS 14.0, *) else { return ["error":"screenshot_requires_macos_14"] }
         do {
             let content = try await SCShareableContent.current
