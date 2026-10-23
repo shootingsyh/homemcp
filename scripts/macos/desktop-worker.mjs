@@ -39,7 +39,9 @@ for await(const line of readline.createInterface({input:process.stdin,crlfDelay:
    const input=JSON.stringify({tool:name,arguments:request.params?.arguments||{}});
    const result=JSON.parse(await invoke(input));
    if(result.error)throw Error(result.error);
-   reply(request.id,{content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result});
+   if(name==='desktop_screenshot'&&result.image_base64){
+    reply(request.id,{content:[{type:'image',mimeType:'image/png',data:result.image_base64}],structuredContent:{width:result.width,height:result.height,mime_type:'image/png'}});
+   }else reply(request.id,{content:[{type:'text',text:JSON.stringify(result)}],structuredContent:result});
   }else error(request.id,'method_not_found');
  }catch(e){error(request.id,String(e.message||e))}
 }
