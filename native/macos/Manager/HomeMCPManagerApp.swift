@@ -243,7 +243,7 @@ struct SetupView: View {
         feedback = "Requesting Screen Recording access for HomeMCP.Desktop…"
         Task {
             let result = await Task.detached {
-                ScriptRunner.execute(helper, [], stdin: "{\\"tool\\":\\"desktop_request_screen_recording\\"}")
+                ScriptRunner.execute(helper, [], stdin: #"{"tool":"desktop_request_screen_recording"}"#)
             }.value
             running = false
             guard result.code == 0,
