@@ -44,7 +44,15 @@ try{
   if(!credential){console.log(JSON.stringify({claimed:false,status:r.status}));}
   else{saveSecret('credential',credential);console.log(JSON.stringify({claimed:true,origin:domain(credential)}));}
  }else if(action==='activate'){
-  const credential=loadSecret('credential');if(!credential)throw Error('claim_first');
+  let credential=loadSecret('credential');
+  if(!credential){
+   const enrollment=pending();
+   if(!enrollment?.id)throw Error('enroll_first');
+   const result=await new TunnelClient().getEnrollment(enrollment.id);
+   credential=validateClaim(result);
+   if(!credential)throw Error('enrollment_not_ready_'+String(result.status||'unknown'));
+   saveSecret('credential',credential);
+  }
   frpBootstrapToken(credential,{override:configuredFrpOverride()});
   const candidates=[process.env.HOMEMCP_FRPC_BIN,path.join(root,'runtime','frpc'),'/opt/homebrew/bin/frpc','/usr/local/bin/frpc'].filter(Boolean);
   const frpc=candidates.find(f=>fs.existsSync(f));
