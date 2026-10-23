@@ -8,6 +8,7 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {loadSecret,saveSecret} from '../../src/tunnel-store.mjs';
 import {TunnelClient,validateClaim} from '../../src/tunnel-client.mjs';
+import {frpBootstrapToken} from '../../src/frp-bootstrap.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const base=process.env.HOMEMCP_HOME||path.join(os.homedir(),'Library','Application Support','HomeMCP');
 const configFile=path.join(base,'config.json');
@@ -26,7 +27,7 @@ try{
  if(process.platform!=='darwin')throw Error('macos_required');
  if(action==='status'){
   const c=loadSecret('credential'),e=pending();
-  console.log(JSON.stringify({claimed:!!c,origin:c?domain(c):null,enrollmentPending:!!e,bootstrapReady:!!loadSecret('frp-bootstrap')?.token}));
+  console.log(JSON.stringify({claimed:!!c,origin:c?domain(c):null,enrollmentPending:!!e,bootstrapReady:!!c}));
  }else if(action==='enroll'){
   // Starts an enrollment request that may require a paid subscription.
   // Caller must display explicit confirmation and collect username/plan.
@@ -42,15 +43,9 @@ try{
   const credential=validateClaim(r);
   if(!credential){console.log(JSON.stringify({claimed:false,status:r.status}));}
   else{saveSecret('credential',credential);console.log(JSON.stringify({claimed:true,origin:domain(credential)}));}
- }else if(action==='bootstrap'){
-  // Read secret from stdin? Avoid embedding secrets in process arguments.
-  const chunks=[];for await(const chunk of process.stdin)chunks.push(chunk);
-  const token=Buffer.concat(chunks).toString('utf8').trim();
-  if(token.length<20)throw Error('invalid_bootstrap_token');
-  saveSecret('frp-bootstrap',{token});console.log('BOOTSTRAP_STORED');
  }else if(action==='activate'){
   const credential=loadSecret('credential');if(!credential)throw Error('claim_first');
-  if(!loadSecret('frp-bootstrap')?.token)throw Error('frp_bootstrap_required');
+  frpBootstrapToken(credential,{override:process.env.HOMEMCP_FRP_BOOTSTRAP_OVERRIDE});
   const candidates=[process.env.HOMEMCP_FRPC_BIN,path.join(root,'runtime','frpc'),'/opt/homebrew/bin/frpc','/usr/local/bin/frpc'].filter(Boolean);
   const frpc=candidates.find(f=>fs.existsSync(f));
   if(!frpc)throw Error('frpc_binary_missing_install_frpc_first');
@@ -97,5 +92,5 @@ try{
    write(JSON.parse(old));
    throw e;
   }
- }else throw Error('usage: managed-setup.mjs status|enroll username plan|claim|bootstrap|activate');
+ }else throw Error('usage: managed-setup.mjs status|enroll username plan|claim|activate');
 }catch(e){console.error('MANAGED_SETUP_ERROR',e.message);process.exitCode=1}
