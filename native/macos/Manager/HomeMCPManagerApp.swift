@@ -27,6 +27,16 @@ struct SetupView: View {
     @State private var running = false
     @State private var connectionGuide: String? = nil
 
+    private let managedDisclaimer = """
+    Privacy & Responsibility Notice
+
+    HomeMCP Managed provides an encrypted tunnel to the HomeMCP Host on your own computer. The cloud relay routes traffic without terminating your HTTPS connection: it cannot decrypt your MCP requests, responses, or credentials, and the service is not designed to retain tunnel payloads.
+
+    Subscription operations may retain account identifiers, assigned domains, plan/payment status, and limited operational records needed to provide the service. Your computer remains responsible for the HomeMCP Host, OAuth, Passkeys, tools, and stored credentials.
+
+    HomeMCP software and the managed tunnel are provided "as is" and "as available", without warranties of uninterrupted operation, security, compatibility, or fitness for a particular purpose, to the extent permitted by law. You are responsible for reviewing permissions, backups, and actions taken through connected AI clients. The provider disclaims liability for losses or damage arising from the software, third-party integrations, or managed service to the maximum extent allowed by applicable law. This notice does not exclude rights or liabilities that cannot legally be excluded.
+    """
+
     private var appRoot: String {
         ProcessInfo.processInfo.environment["HOMEMCP_APP_ROOT"] ??
         Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/HomeMCP").path
@@ -60,6 +70,10 @@ struct SetupView: View {
                 if mode == "managed" {
                     Text("Managed allocates a HomeMCP subdomain and uses the existing Oracle FRP service. Creating a new enrollment may require a paid subscription. You must explicitly approve it.")
                         .foregroundStyle(.secondary)
+                    Text(managedDisclaimer)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 } else {
                     Text("Use an HTTPS domain and a tunnel you control. Nothing is registered with the HomeMCP cloud.")
                         .foregroundStyle(.secondary)
@@ -80,7 +94,7 @@ struct SetupView: View {
                         Button("Request Enrollment…") {
                             let alert = NSAlert()
                             alert.messageText = "Request Managed enrollment?"
-                            alert.informativeText = "This contacts the HomeMCP subscription service. The selected plan may require payment. No enrollment will be submitted unless you explicitly approve."
+                            alert.informativeText = "This contacts the HomeMCP subscription service. The selected plan may require payment. No enrollment will be submitted unless you explicitly approve.\n\n" + managedDisclaimer
                             alert.addButton(withTitle: "Submit enrollment")
                             alert.addButton(withTitle: "Cancel")
                             if alert.runModal() == .alertFirstButtonReturn {
