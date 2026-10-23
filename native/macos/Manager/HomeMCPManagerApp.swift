@@ -217,7 +217,7 @@ struct SetupView: View {
 
         MCP endpoint: \(endpoint)
         Transport: Streamable HTTP (HTTPS).
-        Authentication: Use the OAuth flow exposed by this MCP server if your client supports it. Do not invent credentials or use a local MCP subprocess.
+        Authentication: OAuth 2.0 (required). Use HomeMCP's OAuth discovery and authorization endpoints; finish the browser authorization flow. Do not choose No authentication, paste a shared bearer token, or use a local MCP subprocess.
 
         Register the connection in Muse's MCP settings, complete any required user authorization, discover the available tools, and test a harmless read-only tool. Ask me to perform any UI approval that you cannot complete directly. Do not store tokens in chat history, and do not disable authentication or security checks.
 
@@ -246,7 +246,7 @@ struct SetupView: View {
             }
             if provider == "chatgpt" {
                 Text("On the ChatGPT website:").font(.headline)
-                Text("1. Open chatgpt.com and go to Plugins.\n2. Select + (Add) → Add custom MCP server.\n3. Name it HomeMCP. Paste the MCP URL above under Connection.\n4. Configure authentication using the options offered by ChatGPT (OAuth if supported by this server).\n5. Acknowledge the security warning and select Create as a plugin.\n6. Install the plugin, open Work, and use @HomeMCP to test a read-only tool.")
+                Text("1. Open chatgpt.com and go to Plugins.\n2. Select + (Add) → Add custom MCP server.\n3. Name it HomeMCP. Paste the MCP URL above under Connection.\n4. Select OAuth as the authentication method (required for HomeMCP). Complete HomeMCP's browser sign-in and authorization flow.\n5. Acknowledge the security warning and select Create as a plugin.\n6. Install the plugin, open Work, and use @HomeMCP to test a read-only tool.")
                     .textSelection(.enabled)
                 Text("The available options depend on your ChatGPT plan and workspace permissions.")
                     .foregroundStyle(.secondary).font(.footnote)
