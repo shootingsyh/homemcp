@@ -7,6 +7,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {loadSecret,dataPath} from '../../src/tunnel-store.mjs';
 import {managedPlist,managedPaths} from './managed-launchagents.mjs';
+import {frpBootstrapToken,configuredFrpOverride} from '../../src/frp-bootstrap.mjs';
 try{
  if(process.platform!=='darwin')throw Error('macos_required');
  const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
@@ -15,7 +16,8 @@ try{
  const frpc=process.env.HOMEMCP_FRPC_BIN||path.join(root,'runtime','frpc');
  const c=JSON.parse(fs.readFileSync(path.join(base,'config.json'),'utf8'));
  const credential=loadSecret('credential');
- if(!credential?.subdomain||!loadSecret('frp-bootstrap')?.token)throw Error('managed_credentials_not_ready');
+ if(!credential?.subdomain)throw Error('managed_credentials_not_ready');
+ frpBootstrapToken(credential,{override:configuredFrpOverride()});
  const expected='https://'+credential.subdomain;
  if(c.publicUrl!==expected||c.connectionMode!=='managed')throw Error('managed_origin_not_bound');
  if(!loadSecret('tls-key-production')?.key||!fs.existsSync(path.join(dataPath(),'cert-production','fullchain.pem')))throw Error('managed_tls_not_ready');
