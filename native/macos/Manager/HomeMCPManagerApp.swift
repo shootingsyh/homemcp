@@ -119,10 +119,10 @@ struct SetupView: View {
                 Text("Scan the setup QR code with your phone and create a Passkey. HomeMCP will verify the connection before finishing.")
                     .foregroundStyle(.secondary)
                 HStack {
-                    Button("Show connection QR code") { runScript("passkey-link.mjs", [], openURL: true) }
-                        .buttonStyle(.borderedProminent).controlSize(.large)
+                    Button("Re-connect / Show QR again") { runScript("passkey-link.mjs", [], openURL: true) }
+                        .controlSize(.regular)
                     Button("Verify connection") { checkWizard(advance: true) }
-                        .controlSize(.large)
+                        .buttonStyle(.borderedProminent).controlSize(.large)
                 }.disabled(running)
                 Button("Back") { step = 1 }
             }
