@@ -164,21 +164,35 @@ struct SetupView: View {
 
     private var dashboard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Your HomeMCP is configured").font(.title2)
+            Text("HomeMCP is ready").font(.title2).bold()
+            Text("Next: connect an AI client to use this computer remotely.")
+                .foregroundStyle(.secondary)
+            if let endpoint = mcpEndpoint {
+                Text("Your MCP endpoint").font(.headline)
+                HStack {
+                    Text(endpoint).font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                    Button("Copy URL") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(endpoint, forType: .string)
+                    }
+                }
+            }
+            Text("Connect your AI client").font(.headline)
+            Text("ChatGPT: create a custom MCP plugin using OAuth. Muse: copy a ready-to-use setup prompt with OAuth and HITL instructions.")
+                .foregroundStyle(.secondary).font(.callout)
+            HStack {
+                Button("Connect ChatGPT · Step by step") { connectionGuide = "chatgpt" }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                Button("Connect Muse · Copy prompt") { connectionGuide = "muse" }
+                    .controlSize(.large)
+            }
+            Divider()
             HStack {
                 Button("Check Status") { checkWizard(advance: false) }
                 Button("Connect another device") { runScript("passkey-link.mjs", [], openURL: true) }
-                    .buttonStyle(.borderedProminent).controlSize(.large)
                 Button("Manage devices") { openLocal("/passkeys") }
             }.disabled(running)
-            Divider()
-            Text("Connect your AI assistant").font(.headline)
-            HStack {
-                Button("Set up ChatGPT") { connectionGuide = "chatgpt" }
-                    .buttonStyle(.borderedProminent).controlSize(.large)
-                Button("Set up Muse") { connectionGuide = "muse" }
-                    .controlSize(.large)
-            }
             Button("Restart local Host") { runScript("setup.mjs", ["restore"]) }
                 .disabled(running)
             Divider()
