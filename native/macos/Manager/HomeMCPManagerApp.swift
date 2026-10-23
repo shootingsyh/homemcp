@@ -21,6 +21,9 @@ struct SetupView: View {
     @State private var step = 0
     @State private var mode = "byot"
     @State private var domain = ""
+    @State private var managedUser = ""
+    @State private var managedPlan = "monthly"
+    @State private var bootstrapToken = ""
     @State private var feedback = "Welcome. Your existing device data will be preserved."
     @State private var running = false
 
@@ -55,24 +58,69 @@ struct SetupView: View {
                     Text("HomeMCP Managed · subscription").tag("managed")
                 }.pickerStyle(.radioGroup)
                 if mode == "managed" {
-                    Text("Managed enrollment is not yet available in the Mac installer. This option cannot be completed until the Managed activation flow is implemented.")
+                    Text("Managed allocates a HomeMCP subdomain and uses the existing Oracle FRP service. Creating a new enrollment may require a paid subscription. You must explicitly approve it.")
                         .foregroundStyle(.secondary)
                 } else {
                     Text("Use an HTTPS domain and a tunnel you control. Nothing is registered with the HomeMCP cloud.")
                         .foregroundStyle(.secondary)
                 }
                 Button("Continue") { step = 1 }
-                    .disabled(mode == "managed")
+                    .disabled(running)
             } else if step == 1 {
-                Text("Connect and verify your tunnel").font(.title2)
-                Text("Route your HTTPS domain to this computer's HomeMCP Host, then verify it before enrolling a device.")
-                    .foregroundStyle(.secondary)
-                TextField("https://mcp.example.com", text: $domain).textFieldStyle(.roundedBorder)
-                HStack {
-                    Button("Back") { step = 0 }
-                    Button("Verify and Continue") {
-                        runScript("setup.mjs", ["byot", domain]) { _, _ in step = 2 }
-                    }.disabled(running || !domain.hasPrefix("https://"))
+                if mode == "managed" {
+                    Text("Activate HomeMCP Managed").font(.title2)
+                    Text("Existing enrollment? Select Check Claim. New enrollment may be billable and requires confirmation.")
+                        .foregroundStyle(.secondary)
+                    TextField("Desired subdomain username", text: $managedUser).textFieldStyle(.roundedBorder)
+                    Picker("Plan", selection: $managedPlan) {
+                        Text("Monthly").tag("monthly")
+                        Text("Annual").tag("annual")
+                    }.pickerStyle(.segmented)
+                    HStack {
+                        Button("Request Enrollment…") {
+                            let alert = NSAlert()
+                            alert.messageText = "Request Managed enrollment?"
+                            alert.informativeText = "This contacts the HomeMCP subscription service. The selected plan may require payment. No enrollment will be submitted unless you explicitly approve."
+                            alert.addButton(withTitle: "Submit enrollment")
+                            alert.addButton(withTitle: "Cancel")
+                            if alert.runModal() == .alertFirstButtonReturn {
+                                runScript("managed-setup.mjs", ["enroll", managedUser, managedPlan])
+                            }
+                        }.disabled(running || managedUser.isEmpty)
+                        Button("Check Claim") {
+                            runScript("managed-setup.mjs", ["claim"])
+                        }.disabled(running)
+                    }
+                    SecureField("FRP bootstrap token (provided by your HomeMCP service)", text: $bootstrapToken)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Save Bootstrap Token") {
+                        runScript("managed-setup.mjs", ["bootstrap"], stdin: bootstrapToken) { _, _ in
+                            bootstrapToken = ""
+                        }
+                    }.disabled(running || bootstrapToken.isEmpty)
+                    HStack {
+                        Button("Back") { step = 0 }
+                        Button("Activate Tunnel and Continue") {
+                            runScript("managed-setup.mjs", ["activate"]) { _, output in
+                                if let text = output.data(using: .utf8),
+                                   let json = try? JSONSerialization.jsonObject(with: text) as? [String: Any] {
+                                    domain = json["origin"] as? String ?? ""
+                                }
+                                step = 2
+                            }
+                        }.disabled(running)
+                    }
+                } else {
+                    Text("Connect and verify your tunnel").font(.title2)
+                    Text("Route your HTTPS domain to this computer's HomeMCP Host, then verify it before enrolling a device.")
+                        .foregroundStyle(.secondary)
+                    TextField("https://mcp.example.com", text: $domain).textFieldStyle(.roundedBorder)
+                    HStack {
+                        Button("Back") { step = 0 }
+                        Button("Verify and Continue") {
+                            runScript("setup.mjs", ["byot", domain]) { _, _ in step = 2 }
+                        }.disabled(running || !domain.hasPrefix("https://"))
+                    }
                 }
             } else {
                 Text("Register your first Passkey").font(.title2)
@@ -179,7 +227,7 @@ struct SetupView: View {
     }
 
     private func runScript(_ name: String, _ arguments: [String], openURL: Bool = false,
-                           success: ((Int32, String) -> Void)? = nil) {
+                           stdin: String? = nil, success: ((Int32, String) -> Void)? = nil) {
         running = true
         feedback = "Checking…"
         let executable = nodePath
@@ -188,7 +236,7 @@ struct SetupView: View {
             let result = await Task.detached {
                 let version = ScriptRunner.execute(executable, ["--version"])
                 if version.code != 0 { return (code: version.code, output: "Node runtime failed: " + executable + "\n" + version.output) }
-                return ScriptRunner.execute(executable, [script] + arguments)
+                return ScriptRunner.execute(executable, [script] + arguments, stdin: stdin)
             }.value
             running = false
             if result.code != 0 {
@@ -212,11 +260,17 @@ struct SetupView: View {
 }
 
 private enum ScriptRunner {
-    static func execute(_ executable: String, _ arguments: [String]) -> (code: Int32, output: String) {
+    static func execute(_ executable: String, _ arguments: [String], stdin: String? = nil) -> (code: Int32, output: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         let pipe = Pipe()
+        if let stdin {
+            let input = Pipe()
+            process.standardInput = input
+            try? input.fileHandleForWriting.write(contentsOf: Data(stdin.utf8))
+            try? input.fileHandleForWriting.close()
+        }
         process.standardOutput = pipe
         process.standardError = pipe
         do {
