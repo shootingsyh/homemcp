@@ -1,10 +1,13 @@
-// Writes secrets only to Manager private stdout pipe; never persist or log plaintext.
+// Public official frps handshake constant is embedded; user access is gated by
+// the per-user token enforced by the frps authorization plugin.
 import {loadSecret} from '../src/tunnel-store.mjs';
+import {renderFrpcConfig} from '../src/frp-bootstrap.mjs';
 const credential=loadSecret('credential');
-const bootstrap=loadSecret('frp-bootstrap')?.token;
-if(!credential||!bootstrap){process.exitCode=2;}
+if(!credential){process.exitCode=2;}
 else {
- const config=credential.frpc_config.replaceAll('BOOTSTRAP_TOKEN_EMBEDDED_IN_HOMEMCP_APP',bootstrap).replaceAll('{{ .Envs.HOMEMCP_FRP_BOOTSTRAP }}',bootstrap).replaceAll('{{ .Envs.HOMEMCP_FRP_TENANT }}',credential.token);
- if(!config.includes(credential.token)||!config.includes(bootstrap))process.exitCode=3;
- else process.stdout.write(config);
+ try {
+  // Custom frps deployments can set their own global auth.token in settings.
+  const bootstrapOverride=process.env.HOMEMCP_FRP_BOOTSTRAP_OVERRIDE;
+  process.stdout.write(renderFrpcConfig(credential,{override:bootstrapOverride}));
+ } catch(e){console.error('FRPC_CONFIG_ERROR',e.message);process.exitCode=3;}
 }
