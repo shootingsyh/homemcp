@@ -61,8 +61,15 @@ if [ -d "$ROOT/build/macos-worker" ]; then
   mkdir -p "$RESOURCES/build"
   cp -R "$ROOT/build/macos-worker" "$RESOURCES/build/"
 fi
+# Optional identity-signed distribution. No signing identity: retain unsigned developer package.
+if [ -n "${HOMEMCP_CODESIGN_IDENTITY:-}" ]; then
+  sh "$ROOT/scripts/macos/sign-app.sh" "$MANAGER"
+  PKG_NAME="HomeMCP-signed-app.pkg"
+else
+  PKG_NAME="HomeMCP-unsigned.pkg"
+fi
 mkdir -p "$DEST/pkg-scripts"
 cp "$ROOT/scripts/macos/postinstall.sh" "$DEST/pkg-scripts/postinstall"
 chmod 755 "$DEST/pkg-scripts/postinstall"
-pkgbuild --scripts "$DEST/pkg-scripts" --root "$PAYLOAD" --identifier "si.homemcp.client" --version "$VERSION" "$DEST/HomeMCP-unsigned.pkg"
+pkgbuild --scripts "$DEST/pkg-scripts" --root "$PAYLOAD" --identifier "si.homemcp.client" --version "$VERSION" "$DEST/$PKG_NAME"
 echo "Unsigned development package: $DEST/HomeMCP-unsigned.pkg (NOT release ready)"
