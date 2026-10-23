@@ -25,6 +25,7 @@ struct SetupView: View {
     @State private var managedPlan = "monthly"
     @State private var feedback = "Welcome. Your existing device data will be preserved."
     @State private var running = false
+    @State private var connectionGuide: String? = nil
 
     private var appRoot: String {
         ProcessInfo.processInfo.environment["HOMEMCP_APP_ROOT"] ??
@@ -131,6 +132,12 @@ struct SetupView: View {
                 .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(24)
+        .sheet(item: Binding(
+            get: { connectionGuide.map { GuideSelection(id: $0) } },
+            set: { connectionGuide = $0?.id }
+        )) { selection in
+            connectionGuideSheet(selection.id)
+        }
         .onChange(of: step) { _, newStep in
             if newStep == 2 && !completed &&
                ProcessInfo.processInfo.environment["HOMEMCP_UI_SMOKE"] != "1" {
@@ -164,6 +171,14 @@ struct SetupView: View {
                     .buttonStyle(.borderedProminent).controlSize(.large)
                 Button("Manage devices") { openLocal("/passkeys") }
             }.disabled(running)
+            Divider()
+            Text("Connect your AI assistant").font(.headline)
+            HStack {
+                Button("Set up ChatGPT") { connectionGuide = "chatgpt" }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                Button("Set up Muse") { connectionGuide = "muse" }
+                    .controlSize(.large)
+            }
             Button("Restart local Host") { runScript("setup.mjs", ["restore"]) }
                 .disabled(running)
             Divider()
@@ -180,6 +195,77 @@ struct SetupView: View {
                 }
             }
         }
+    }
+
+    private var mcpEndpoint: String? {
+        let config = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support/HomeMCP/config.json")
+        guard let data = try? Data(contentsOf: config),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let origin = json["publicUrl"] as? String,
+              let url = URL(string: origin),
+              url.scheme == "https", url.host != nil,
+              url.user == nil, url.password == nil,
+              url.path.isEmpty || url.path == "/" else { return nil }
+        return origin.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/mcp"
+    }
+
+    private var museConnectionPrompt: String {
+        let endpoint = mcpEndpoint ?? "<your HomeMCP HTTPS endpoint>/mcp"
+        return """
+        Create a remote MCP connection named HomeMCP for my own computer.
+
+        MCP endpoint: \(endpoint)
+        Transport: Streamable HTTP (HTTPS).
+        Authentication: Use the OAuth flow exposed by this MCP server if your client supports it. Do not invent credentials or use a local MCP subprocess.
+
+        Register the connection in Muse's MCP settings, complete any required user authorization, discover the available tools, and test a harmless read-only tool. Ask me to perform any UI approval that you cannot complete directly. Do not store tokens in chat history, and do not disable authentication or security checks.
+
+        Tell me whether the connection and test succeeded. If you cannot configure MCP connections directly, give me the precise manual steps instead.
+        """
+    }
+
+    @ViewBuilder
+    private func connectionGuideSheet(_ provider: String) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(provider == "chatgpt" ? "Connect ChatGPT" : "Connect Muse")
+                    .font(.title2).bold()
+                Spacer()
+                Button("Done") { connectionGuide = nil }
+            }
+            if let endpoint = mcpEndpoint {
+                Text("Your MCP server").font(.headline)
+                Text(endpoint).font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                Button("Copy MCP URL") { NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(endpoint, forType: .string) }
+            } else {
+                Text("Complete tunnel setup first. No public HTTPS MCP URL is configured.")
+                    .foregroundStyle(.red)
+            }
+            if provider == "chatgpt" {
+                Text("On the ChatGPT website:").font(.headline)
+                Text("1. Open chatgpt.com and go to Plugins.\n2. Select + (Add) → Add custom MCP server.\n3. Name it HomeMCP. Paste the MCP URL above under Connection.\n4. Configure authentication using the options offered by ChatGPT (OAuth if supported by this server).\n5. Acknowledge the security warning and select Create as a plugin.\n6. Install the plugin, open Work, and use @HomeMCP to test a read-only tool.")
+                    .textSelection(.enabled)
+                Text("The available options depend on your ChatGPT plan and workspace permissions.")
+                    .foregroundStyle(.secondary).font(.footnote)
+                Button("Open ChatGPT") { NSWorkspace.shared.open(URL(string: "https://chatgpt.com")!) }
+                    .buttonStyle(.borderedProminent)
+            } else {
+                Text("Copy this prompt into Muse:").font(.headline)
+                ScrollView {
+                    Text(museConnectionPrompt).font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(maxHeight: 260)
+                Button("Copy Muse setup prompt") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(museConnectionPrompt, forType: .string)
+                }.buttonStyle(.borderedProminent)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(24).frame(width: 640, height: provider == "chatgpt" ? 570 : 530)
     }
 
     private func openLocal(_ suffix: String) {
@@ -259,6 +345,8 @@ struct SetupView: View {
         }
     }
 }
+
+private struct GuideSelection: Identifiable { let id: String }
 
 private enum ScriptRunner {
     static func execute(_ executable: String, _ arguments: [String], stdin: String? = nil) -> (code: Int32, output: String) {
