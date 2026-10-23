@@ -39,3 +39,14 @@ test('both smoke modes avoid real Host startup and render isolated wizard pages'
  assert.match(mac,/HOMEMCP_UI_SMOKE_PAGE/);
  assert.match(mac,/HOMEMCP_UI_READY/);
 });
+
+test('macOS dashboard offers separate ChatGPT walkthrough and Muse prompt',()=>{
+ assert.match(mac,/Button\("Set up ChatGPT"\)/);
+ assert.match(mac,/Button\("Set up Muse"\)/);
+ assert.match(mac,/Add custom MCP server/);
+ assert.match(mac,/Create as a plugin/);
+ assert.match(mac,/Copy Muse setup prompt/);
+ assert.match(mac,/Transport: Streamable HTTP/);
+ assert.match(mac,/json\["publicUrl"\]/);
+ assert.match(mac,/\+ "\/mcp"/);
+});
