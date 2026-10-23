@@ -27,6 +27,14 @@ struct SetupView: View {
     @State private var running = false
     @State private var connectionGuide: String? = nil
 
+    private let managedNotice = """
+    Privacy & Responsibility
+
+    HomeMCP Managed is a tunnel service. Your HomeMCP Host runs on your own computer. The cloud relay forwards encrypted HTTPS traffic without decrypting your MCP requests, responses, or credentials, and it does not store that traffic. Subscription details such as your account identifier, assigned domain, plan and payment status may be stored to operate the service.
+
+    HomeMCP software, the managed tunnel, and third-party integrations are provided as-is, without promises of uninterrupted availability or error-free operation. You use them at your own risk; the provider does not accept responsibility for problems, losses, or damages arising from their use.
+    """
+
     private var appRoot: String {
         ProcessInfo.processInfo.environment["HOMEMCP_APP_ROOT"] ??
         Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/HomeMCP").path
@@ -60,6 +68,10 @@ struct SetupView: View {
                 if mode == "managed" {
                     Text("Managed allocates a HomeMCP subdomain and uses the existing Oracle FRP service. Creating a new enrollment may require a paid subscription. You must explicitly approve it.")
                         .foregroundStyle(.secondary)
+                    Text(managedNotice)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 } else {
                     Text("Use an HTTPS domain and a tunnel you control. Nothing is registered with the HomeMCP cloud.")
                         .foregroundStyle(.secondary)
