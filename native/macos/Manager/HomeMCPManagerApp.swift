@@ -1,6 +1,8 @@
 import SwiftUI
 import Foundation
 import AppKit
+import ApplicationServices
+import CoreGraphics
 
 @main
 struct HomeMCPManagerApp: App {
@@ -26,6 +28,8 @@ struct SetupView: View {
     @State private var feedback = "Welcome. Your existing device data will be preserved."
     @State private var running = false
     @State private var connectionGuide: String? = nil
+    @State private var accessibilityGranted: Bool? = nil
+    @State private var screenRecordingGranted: Bool? = nil
 
     private var appRoot: String {
         ProcessInfo.processInfo.environment["HOMEMCP_APP_ROOT"] ??
@@ -193,6 +197,25 @@ struct SetupView: View {
                 Button("Connect another device") { runScript("passkey-link.mjs", [], openURL: true) }
                 Button("Manage devices") { openLocal("/passkeys") }
             }.disabled(running)
+            Divider()
+            Text("macOS Permissions").font(.headline)
+            HStack {
+                Text("Accessibility")
+                Spacer()
+                Text(permissionLabel(accessibilityGranted))
+                    .foregroundStyle(accessibilityGranted == true ? .green : .secondary)
+                Button("Request / Settings") { requestAccessibility() }
+            }
+            HStack {
+                Text("Screen Recording")
+                Spacer()
+                Text(permissionLabel(screenRecordingGranted))
+                    .foregroundStyle(screenRecordingGranted == true ? .green : .secondary)
+                Button("Request / Settings") { requestScreenRecording() }
+            }
+            Button("Check permissions again") { checkPermissions() }
+            Text("These checks apply to HomeMCP Manager. Desktop automation helpers may need separate macOS approval. Terminal and system metrics normally require neither permission.")
+                .font(.footnote).foregroundStyle(.secondary)
             Button("Restart local Host") { runScript("setup.mjs", ["restore"]) }
                 .disabled(running)
             Divider()
@@ -209,6 +232,34 @@ struct SetupView: View {
                 }
             }
         }
+    }
+
+    private func permissionLabel(_ state: Bool?) -> String {
+        guard let state else { return "Not checked" }
+        return state ? "Allowed" : "Not allowed"
+    }
+
+    private func checkPermissions() {
+        accessibilityGranted = AXIsProcessTrusted()
+        screenRecordingGranted = CGPreflightScreenCaptureAccess()
+    }
+
+    private func openPrivacySettings(_ pane: String) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func requestAccessibility() {
+        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        let options = [key: true] as CFDictionary
+        accessibilityGranted = AXIsProcessTrustedWithOptions(options)
+        if accessibilityGranted != true { openPrivacySettings("Privacy_Accessibility") }
+    }
+
+    private func requestScreenRecording() {
+        screenRecordingGranted = CGRequestScreenCaptureAccess()
+        if screenRecordingGranted != true { openPrivacySettings("Privacy_ScreenCapture") }
     }
 
     private var mcpEndpoint: String? {
@@ -322,6 +373,7 @@ struct SetupView: View {
                 return
             }
             if state.complete {
+                checkPermissions()
                 completed = true
                 feedback = "Connected: " + state.origin + " · Passkeys: \(state.passkeyCount)"
             } else {
