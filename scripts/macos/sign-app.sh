@@ -12,7 +12,7 @@ sign_one() {
 }
 # Sign embedded libraries and executable Mach-O binaries, including Playwright dependencies.
 # Avoid following symlinks and do not accidentally sign scripts or data.
-find "$RES" -type f -print0 | while IFS= read -r -d '' item; do
+find "$RES" -type f | while IFS= read -r item; do
   case "$(/usr/bin/file -b "$item")" in
     *Mach-O*) sign_one "$item" ;;
   esac
