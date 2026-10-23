@@ -1,9 +1,22 @@
 import SwiftUI
 import Foundation
 import AppKit
+import ServiceManagement
 
 @main
 struct HomeMCPManagerApp: App {
+    init() {
+        if CommandLine.arguments.contains("--register-desktop-service") {
+            do {
+                try SMAppService.agent(plistName: "si.homemcp.desktop.plist").register()
+                print("DESKTOP_SERVICE_REGISTRATION_OK")
+                exit(0)
+            } catch {
+                fputs("DESKTOP_SERVICE_REGISTRATION_FAILED: \(error)\n", stderr)
+                exit(1)
+            }
+        }
+    }
     var body: some Scene {
         WindowGroup("HomeMCP") { SetupView().frame(minWidth: 580, minHeight: 440) }
     }
