@@ -7,7 +7,7 @@ function regOptions(o){return {...o,challenge:decode(o.challenge),user:{...o.use
 function loginOptions(o){return {...o,challenge:decode(o.challenge),allowCredentials:(o.allowCredentials||[]).map(c=>({...c,id:decode(c.id)}))};}
 function regJSON(c){return {id:c.id,rawId:encode(c.rawId),type:c.type,response:{clientDataJSON:encode(c.response.clientDataJSON),attestationObject:encode(c.response.attestationObject),transports:c.response.getTransports?.()||[]},clientExtensionResults:c.getClientExtensionResults()};}
 function authJSON(c){return {id:c.id,rawId:encode(c.rawId),type:c.type,response:{clientDataJSON:encode(c.response.clientDataJSON),authenticatorData:encode(c.response.authenticatorData),signature:encode(c.response.signature),userHandle:c.response.userHandle?encode(c.response.userHandle):undefined},clientExtensionResults:c.getClientExtensionResults()};}
-byId('register').onclick=async()=>{try{const token=byId('bootstrap').value;const invite=new URLSearchParams(location.search).get('enroll');const {challengeId,options}=await request('/auth/register/options',{invite},token);const c=await navigator.credentials.create({publicKey:regOptions(options)});const r=await request('/auth/register/verify',{challengeId,response:regJSON(c),invite},token);byId('bootstrap').value='';if(r.verified){status('✓ Device enrolled. Its Passkey is ready to approve HomeMCP requests.');byId('register').hidden=true;document.querySelector('.note').textContent='Enrollment complete. You may close this tab.';}else status('Registration failed');}catch(e){status('Registration failed: '+e.message)}};
+byId('register').onclick=async()=>{try{const token=byId('bootstrap').value;const invite=new URLSearchParams(location.search).get('enroll');const {challengeId,options}=await request('/auth/register/options',{invite},token);const c=await navigator.credentials.create({publicKey:regOptions(options)});const r=await request('/auth/register/verify',{challengeId,response:regJSON(c),invite},token);byId('bootstrap').value='';if(r.verified){status('✓ Device enrolled. Its Passkey is ready to approve HomeMCP requests.');byId('register').hidden=true;byId('heading').textContent='Device connected';byId('intro').textContent='Your Passkey is ready. Return to HomeMCP Manager and select Verify connection.';byId('enrollment').hidden=true;}else status('Registration failed');}catch(e){status('Registration failed: '+e.message)}};
 byId('login').onclick=async()=>{try{const {challengeId,options}=await request('/auth/login/options');const c=await navigator.credentials.get({publicKey:loginOptions(options)});await request('/auth/login/verify',{challengeId,response:authJSON(c)});status('Authenticated');await refresh()}catch(e){status('Sign-in failed: '+e.message)}};
 byId('refresh').onclick=()=>refresh().catch(e=>status('Cannot load: '+e.message));
 byId('logout').onclick=async()=>{await request('/auth/logout');byId('queue').replaceChildren();status('Signed out')};
@@ -48,21 +48,23 @@ async function refresh(){
  if(!box.children.length)status('No pending approvals (or request expired)');
 }
 
-if(new URLSearchParams(location.search).has('enroll')){
- byId('enrollment').querySelector('input').hidden=true;
- byId('register').textContent='Complete device enrollment';
- status('Step 2 of 2: create a Passkey on this device to complete enrollment.');
-}
-
 const params=new URLSearchParams(location.search);
-if(params.has('pending_id')){
+if(params.has('enroll')){
+ byId('heading').textContent='Connect this device';
+ byId('intro').textContent='Create a Passkey on this phone to connect it to your HomeMCP.';
+ byId('enrollment').hidden=false;
+ byId('bootstrap').hidden=true;
+ byId('actions').hidden=true;
+ status('');
+}else if(params.has('pending_id')){
+ byId('heading').textContent='Approve HomeMCP request';
+ byId('intro').textContent='Review this operation. Your Passkey confirms your decision.';
  byId('enrollment').hidden=true;
- byId('login').hidden=true;byId('refresh').hidden=true;byId('logout').hidden=true;
- document.querySelector('.note').textContent='Review this specific operation. One Passkey confirmation is needed to approve.';
+ byId('actions').hidden=true;
  refresh().catch(e=>status('Cannot load request: '+e.message));
-}else if(params.has('enroll')){
- byId('login').hidden=true;byId('refresh').hidden=true;byId('logout').hidden=true;
 }else{
+ byId('heading').textContent='HomeMCP approvals';
+ byId('intro').textContent='Open a request link to review an operation, or sign in to see pending approvals.';
  byId('enrollment').hidden=true;
- document.querySelector('.note').textContent='Open an approval link from Muse to approve in one step.';
+ byId('actions').hidden=false;
 }
