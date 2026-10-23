@@ -7,7 +7,7 @@ const win=fs.readFileSync(new URL('../native/Manager/Program.cs',import.meta.url
 
 test('macOS wizard gates the Passkey step behind tunnel verification',()=>{
  assert.match(mac,/else if step == 1[\s\S]*?runScript\("setup\.mjs", \["byot", domain\]\) \{ _, _ in step = 2 \}/);
- assert.match(mac,/else \{\s*Text\("Register your first Passkey"\)/);
+ assert.match(mac,/else \{\s*Text\("Connect your phone"\)/);
  assert.match(mac,/if state\.complete \{\s*completed = true/);
  assert.match(mac,/passkeyCount/);
  assert.match(mac,/Restart Setup Wizard/);
