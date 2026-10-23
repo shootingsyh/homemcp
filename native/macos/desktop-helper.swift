@@ -159,6 +159,13 @@ func serve(socketPath: String) {
         close(client)
     }
 }
+if CommandLine.arguments.contains("--serve-default") {
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let directory = home.appendingPathComponent("Library/Application Support/HomeMCP", isDirectory: true)
+    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    serve(socketPath: directory.appendingPathComponent("desktop-sm.sock").path)
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--serve" {
     serve(socketPath: CommandLine.arguments[2])
     exit(0)
