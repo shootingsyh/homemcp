@@ -216,10 +216,20 @@ struct SetupView: View {
         Create a remote MCP connection named HomeMCP for my own computer.
 
         MCP endpoint: \(endpoint)
+        This endpoint belongs to the HomeMCP Host running on my own computer. The public frps/tunneld relay only forwards encrypted traffic; it is NOT the MCP server or OAuth provider.
         Transport: Streamable HTTP (HTTPS).
         Authentication: OAuth 2.0 (required). Use HomeMCP's OAuth discovery and authorization endpoints; finish the browser authorization flow. Do not choose No authentication, paste a shared bearer token, or use a local MCP subprocess.
 
-        Register the connection in Muse's MCP settings, complete any required user authorization, discover the available tools, and test a harmless read-only tool. Ask me to perform any UI approval that you cannot complete directly. Do not store tokens in chat history, and do not disable authentication or security checks.
+        Register the connection in Muse's MCP settings, complete OAuth user authorization, discover the available tools, and test a harmless read-only tool.
+
+        Human-in-the-loop (HITL) is mandatory for sensitive HomeMCP operations:
+        - When a tool requests approval or returns a pending approval ID/link, pause that operation and show me the approval link with a short description of the exact action, target, and risks.
+        - I will approve or reject it myself using my registered phone/computer Passkey. Never try to approve for me, impersonate my Passkey, or bypass HomeMCP security.
+        - After I decide, use the HomeMCP approval_status / approval_resume / approval_result tools as appropriate to retrieve the decision and resume the SAME pending operation. Follow the tool response contract; do not invent arguments.
+        - A pending approval is NOT permission to execute. On denial or expiration, stop and report it. On uncertainty/timeouts, check the existing approval before retrying; never duplicate a potentially destructive operation.
+        - ChatGPT or Muse may show its own separate permission prompt; that is distinct from HomeMCP Passkey HITL approval. Do not confuse them.
+
+        Do not store tokens in chat history, and do not disable authentication or security checks.
 
         Tell me whether the connection and test succeeded. If you cannot configure MCP connections directly, give me the precise manual steps instead.
         """
@@ -235,17 +245,17 @@ struct SetupView: View {
                 Button("Done") { connectionGuide = nil }
             }
             if let endpoint = mcpEndpoint {
-                Text("Your MCP server").font(.headline)
+                Text("HomeMCP Host on this computer").font(.headline)
                 Text(endpoint).font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
                 Button("Copy MCP URL") { NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(endpoint, forType: .string) }
             } else {
-                Text("Complete tunnel setup first. No public HTTPS MCP URL is configured.")
+                Text("Complete tunnel setup first. The tunnel only forwards to the MCP Host running on this computer.")
                     .foregroundStyle(.red)
             }
             if provider == "chatgpt" {
-                Text("On the ChatGPT website:").font(.headline)
+                Text("Connect ChatGPT to your local HomeMCP Host:").font(.headline)
                 Text("1. Open chatgpt.com and go to Plugins.\n2. Select + (Add) → Add custom MCP server.\n3. Name it HomeMCP. Paste the MCP URL above under Connection.\n4. Select OAuth as the authentication method (required for HomeMCP). Complete HomeMCP's browser sign-in and authorization flow.\n5. Acknowledge the security warning and select Create as a plugin.\n6. Install the plugin, open Work, and use @HomeMCP to test a read-only tool.")
                     .textSelection(.enabled)
                 Text("The available options depend on your ChatGPT plan and workspace permissions.")
