@@ -12,3 +12,11 @@ test('phone QR enrollment has a single primary action',()=>{
  assert.match(js,/byId\('enrollment'\)\.hidden=false/);
  assert.match(js,/Your Passkey is ready/);
 });
+
+test('synced existing macOS Passkey presents an authentication fallback',()=>{
+ assert.match(js,/InvalidStateError/);
+ assert.match(js,/Use existing Passkey/);
+ assert.match(js,/request\('\/auth\/login\/options'\)/);
+ assert.match(js,/request\('\/auth\/login\/verify'/);
+ assert.match(js,/Existing Passkey verified/);
+});
