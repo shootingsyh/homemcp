@@ -1,8 +1,10 @@
 import readline from 'node:readline';
+import net from 'node:net';
+import os from 'node:os';
 import {spawn} from 'node:child_process';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-const invoke=(input)=>new Promise((resolve,reject)=>{
+const invokeLegacy=(input)=>new Promise((resolve,reject)=>{
  const child=spawn(binary,[],{stdio:['pipe','pipe','pipe'],shell:false});
  let out='',ended=false;
  const stop=(error,result)=>{if(ended)return;ended=true;clearTimeout(timer);if(error)reject(error);else resolve(result)};
@@ -15,6 +17,18 @@ const invoke=(input)=>new Promise((resolve,reject)=>{
 });
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const binary=process.env.HOMEMCP_MAC_DESKTOP_HELPER||path.join(root,'native','macos','home-mcp-desktop');
+const socketPath=process.env.HOMEMCP_MAC_DESKTOP_SOCKET || path.join(os.homedir(),'Library','Application Support','HomeMCP','desktop.sock');
+const invokeSocket=input=>new Promise((resolve,reject)=>{
+ let out='',done=false;
+ const socket=net.createConnection(socketPath);
+ const timer=setTimeout(()=>{socket.destroy();finish(Error('desktop_service_timeout'))},25000);
+ function finish(error,value){if(done)return;done=true;clearTimeout(timer);if(error)reject(error);else resolve(value)}
+ socket.on('connect',()=>socket.end(input+'\\n'));
+ socket.on('data',d=>{out+=d.toString('utf8');if(out.length>24*1024*1024){socket.destroy();finish(Error('desktop_service_output_too_large'))}});
+ socket.on('end',()=>finish(null,out));
+ socket.on('error',e=>finish(Error('desktop_service_unavailable: '+e.code)));
+});
+const invoke=input=>process.env.HOMEMCP_MAC_DESKTOP_LEGACY==='1'?invokeLegacy(input):invokeSocket(input);
 const definitions=[
  ['desktop_permissions','Report native helper permissions',{}],
  ['desktop_screenshot','Capture the primary Mac display',{ }],
