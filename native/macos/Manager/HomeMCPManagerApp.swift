@@ -30,7 +30,7 @@ struct SetupView: View {
     private let managedNotice = """
     Privacy & Responsibility
 
-    HomeMCP Managed is a tunnel service. Your HomeMCP Host runs on your own computer. The cloud relay forwards encrypted HTTPS traffic without decrypting your MCP requests, responses, or credentials, and it does not store that traffic. Subscription details such as your account identifier, assigned domain, plan and payment status may be stored to operate the service.
+    HomeMCP Managed is an experimental tunnel service offered for testing. We recommend using your own tunnel (Bring Your Own Tunnel) whenever possible. Your HomeMCP Host runs on your own computer. The cloud relay forwards encrypted HTTPS traffic without decrypting your MCP requests, responses, or credentials, and it does not store that traffic. Subscription details such as your account identifier, assigned domain, plan and payment status may be stored to operate the service.
 
     HomeMCP software, the managed tunnel, and third-party integrations are provided as-is, without promises of uninterrupted availability or error-free operation. You use them at your own risk; the provider does not accept responsibility for problems, losses, or damages arising from their use.
     """
@@ -66,7 +66,7 @@ struct SetupView: View {
                     Text("HomeMCP Managed · subscription").tag("managed")
                 }.pickerStyle(.radioGroup)
                 if mode == "managed" {
-                    Text("Managed allocates a HomeMCP subdomain and uses the existing Oracle FRP service. Creating a new enrollment may require a paid subscription. You must explicitly approve it.")
+                    Text("HomeMCP Managed is an experimental testing service, not a production-grade service. We recommend Bring Your Own Tunnel whenever possible. Managed allocates a HomeMCP subdomain and may require a paid subscription; enrollment requires your confirmation.")
                         .foregroundStyle(.secondary)
                     Text(managedNotice)
                         .font(.footnote)
