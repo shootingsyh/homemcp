@@ -25,13 +25,30 @@ node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)'
 mkdir -p "$RESOURCES/runtime"
 cp -L "$NODE_BIN" "$RESOURCES/runtime/node"
 chmod 755 "$RESOURCES/runtime/node"
-# Bundle a preinstalled FRP client for Managed tunnel mode when available.
-# Do not download or build FRP during packaging.
-FRPC_BIN=$(command -v frpc 2>/dev/null || true)
-if [ -n "$FRPC_BIN" ]; then
-  cp -L "$FRPC_BIN" "$RESOURCES/runtime/frpc"
-  chmod 755 "$RESOURCES/runtime/frpc"
+# Always bundle the official precompiled FRP client. The end user must not
+# install Homebrew, Go, or frpc. Pin release and verify SHA-256 before extraction.
+FRP_VERSION=0.71.1
+case "$(uname -m)" in
+  arm64)
+    FRP_ARCH=arm64
+    FRP_SHA256=d15d0324b99e14619c9aa46e37f6db588c06a09be4bc6f7948890b6b61077842
+    ;;
+  x86_64)
+    FRP_ARCH=amd64
+    FRP_SHA256=8acb59b6fb998cc8d209d1373d90bf70fa5ec3efeb4dfbc7bda6ce3abd78cb45
+    ;;
+  *) echo "Unsupported macOS architecture for frpc: $(uname -m)" >&2; exit 1 ;;
+esac
+FRP_NAME="frp_${FRP_VERSION}_darwin_${FRP_ARCH}"
+FRP_TAR="$DEST/$FRP_NAME.tar.gz"
+FRP_URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${FRP_NAME}.tar.gz"
+if [ ! -f "$FRP_TAR" ] || ! printf '%s  %s\n' "$FRP_SHA256" "$FRP_TAR" | shasum -a 256 -c >/dev/null 2>&1; then
+  curl --fail --location --retry 3 --silent --show-error "$FRP_URL" -o "$FRP_TAR"
 fi
+printf '%s  %s\n' "$FRP_SHA256" "$FRP_TAR" | shasum -a 256 -c
+tar -xOzf "$FRP_TAR" "$FRP_NAME/frpc" > "$RESOURCES/runtime/frpc"
+chmod 755 "$RESOURCES/runtime/frpc"
+"$RESOURCES/runtime/frpc" --version
 # Fail the build if the packaged runtime cannot parse the exact scripts shipped.
 "$RESOURCES/runtime/node" --check "$RESOURCES/scripts/macos/setup.mjs"
 "$RESOURCES/runtime/node" --check "$RESOURCES/scripts/macos/provision.mjs"
