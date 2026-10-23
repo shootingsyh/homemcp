@@ -51,8 +51,9 @@ try{
  }else if(action==='activate'){
   const credential=loadSecret('credential');if(!credential)throw Error('claim_first');
   if(!loadSecret('frp-bootstrap')?.token)throw Error('frp_bootstrap_required');
-  const frpc=process.env.HOMEMCP_FRPC_BIN||path.join(root,'runtime','frpc');
-  if(!fs.existsSync(frpc))throw Error('frpc_binary_missing_install_frpc_first');
+  const candidates=[process.env.HOMEMCP_FRPC_BIN,path.join(root,'runtime','frpc'),'/opt/homebrew/bin/frpc','/usr/local/bin/frpc'].filter(Boolean);
+  const frpc=candidates.find(f=>fs.existsSync(f));
+  if(!frpc)throw Error('frpc_binary_missing_install_frpc_first');
   // Issuance uses production LE DNS-01 and may take minutes.
   const cert=path.join(base,'data','oracle-tunnel','cert-production','fullchain.pem');
   if(!fs.existsSync(cert)||!loadSecret('tls-key-production')?.key)cli('certificate','--production');
@@ -73,6 +74,24 @@ try{
     launch('bootstrap','gui/'+uid,plist);
     launch('kickstart','-k','gui/'+uid+'/'+label);
    }
+   // Verify that the public HTTPS endpoint is serving the current Host, not
+   // merely that frpc launched. The local challenge is short-lived and bound
+   // to this installation; no token or secret is exposed through the tunnel.
+   const local='http://127.0.0.1:'+updated.port;
+   const challengeRes=await fetch(local+'/admin/tunnel-check',{method:'POST',headers:{Authorization:'Bearer '+updated.security.adminToken},signal:AbortSignal.timeout(10000)});
+   if(!challengeRes.ok)throw Error('local_tunnel_check_failed');
+   const challenge=await challengeRes.json();
+   let verified=false;
+   for(let i=0;i<12;i++){
+    try{
+     const result=await fetch(origin+challenge.path,{signal:AbortSignal.timeout(4000),redirect:'error'});
+     if(result.ok&&(await result.json()).nonce===challenge.nonce){verified=true;break}
+    }catch{}
+    await new Promise(resolve=>setTimeout(resolve,1500));
+   }
+   if(!verified)throw Error('managed_tunnel_public_verification_failed');
+   const metadata=await fetch(origin+'/.well-known/oauth-authorization-server',{signal:AbortSignal.timeout(10000),redirect:'error'});
+   if(!metadata.ok||(await metadata.json()).issuer!==origin)throw Error('managed_oauth_issuer_mismatch');
    console.log(JSON.stringify({active:true,origin}));
   }catch(e){
    write(JSON.parse(old));
