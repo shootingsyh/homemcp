@@ -30,7 +30,7 @@ if(config.workers.some(x=>x.name==='browser'))ensure('browser_tabs',{worker:'bro
 const nativeHelper=path.join(root,'..','..','MacOS','HomeMCP.Desktop');
 if(fs.existsSync(nativeHelper)){
  if(!config.workers.some(x=>x.name==='mac-desktop'))config.workers.push({
-  name:'mac-desktop',transport:'stdio',command:node,
+  name:'mac-desktop',transport:'stdio',maxLineBytes:32*1024*1024,command:node,
   args:[path.join(root,'scripts','macos','desktop-worker.mjs')],
   env:{HOMEMCP_MAC_DESKTOP_HELPER:nativeHelper}
  });
