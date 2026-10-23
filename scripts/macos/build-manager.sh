@@ -6,7 +6,8 @@ DEST="$ROOT/build/macos-manager/HomeMCP Manager.app/Contents"
 mkdir -p "$DEST/MacOS" "$DEST/Resources"
 swiftc -parse-as-library "$ROOT/native/macos/Manager/HomeMCPManagerApp.swift" \
   -o "$DEST/MacOS/HomeMCP.Manager" -framework SwiftUI -framework AppKit
-swiftc "$ROOT/native/macos/keychain-helper.swift" -o "$ROOT/native/macos/home-mcp-keychain" -framework Security
+mkdir -p "$ROOT/build/macos-keychain"
+swiftc "$ROOT/native/macos/keychain-helper.swift" -o "$ROOT/build/macos-keychain/home-mcp-keychain" -framework Security
 swiftc "$ROOT/native/macos/desktop-helper.swift" -o "$DEST/MacOS/HomeMCP.Desktop" -framework AppKit -framework ApplicationServices -framework CoreGraphics
 cat > "$DEST/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
