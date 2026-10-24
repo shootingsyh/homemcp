@@ -3,6 +3,7 @@ import Foundation
 import AppKit
 import ServiceManagement
 import CoreGraphics
+import ApplicationServices
 
 @main
 struct HomeMCPManagerApp: App {
@@ -20,6 +21,7 @@ struct HomeMCPManagerApp: App {
         WindowGroup("HomeMCP", id: "manager") {
             SetupView().frame(minWidth: 580, minHeight: 440)
         }
+        WindowGroup("HomeMCP Updates", id: "updates") { UpdateView() }
         MenuBarExtra("HomeMCP", systemImage: "display") {
             ManagerMenu()
         }
@@ -30,6 +32,7 @@ struct ManagerMenu: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         Button("Open HomeMCP Manager") { openWindow(id: "manager") }
+        Button("Update HomeMCP…") { openWindow(id: "updates") }
         Divider()
         Button("Request Screen Recording") { _ = CGRequestScreenCaptureAccess() }
         Button("Open Screen Recording Settings") {
@@ -238,9 +241,10 @@ struct SetupView: View {
             }.disabled(running)
             Divider()
             Text("Desktop control permissions").font(.headline)
-            Text("Screen capture needs macOS permission for the process that runs HomeMCP.Desktop. Request access below; macOS may require enabling the listed component in System Settings and restarting the Host.")
+            Text("Enable Screen Recording and Accessibility for HomeMCP Manager. Quit and reopen Manager if macOS asks.")
                 .font(.footnote).foregroundStyle(.secondary)
             HStack {
+                Button("Request Accessibility") { requestAccessibility() }
                 Button("Accessibility Settings") { openPrivacySettings("Privacy_Accessibility") }
                 Button("Request Screen Recording") { requestDesktopScreenRecording() }
                     .disabled(running)
@@ -265,31 +269,16 @@ struct SetupView: View {
     }
 
     private func requestDesktopScreenRecording() {
-        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/HomeMCP.Desktop").path
-        guard FileManager.default.isExecutableFile(atPath: helper) else {
-            feedback = "Desktop Helper is missing from this installation. Rebuild and reinstall HomeMCP."
-            return
-        }
-        running = true
-        feedback = "Requesting Screen Recording access for HomeMCP.Desktop…"
-        Task {
-            let result = await Task.detached {
-                ScriptRunner.execute(helper, [], stdin: #"{"tool":"desktop_request_screen_recording"}"#)
-            }.value
-            running = false
-            guard result.code == 0,
-                  let data = result.output.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                feedback = "Permission helper failed: " + result.output
-                return
-            }
-            if json["screen_recording"] as? Bool == true {
-                feedback = "Screen Recording is allowed for this request. Test desktop_screenshot through the Host."
-            } else {
-                feedback = "Screen Recording not yet enabled. Check the macOS permission prompt and System Settings; enable the HomeMCP component shown there. Restart the Host if required."
-                openPrivacySettings("Privacy_ScreenCapture")
-            }
-        }
+        let granted = CGRequestScreenCaptureAccess()
+        feedback = granted ? "Screen Recording is enabled." : "Enable HomeMCP Manager in Screen Recording settings."
+        if !granted { openPrivacySettings("Privacy_ScreenCapture") }
+    }
+
+    private func requestAccessibility() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        let granted = AXIsProcessTrustedWithOptions(options)
+        feedback = granted ? "Accessibility is enabled." : "Enable HomeMCP Manager in Accessibility settings."
+        if !granted { openPrivacySettings("Privacy_Accessibility") }
     }
 
     private func openPrivacySettings(_ pane: String) {
@@ -483,3 +472,4 @@ private enum ScriptRunner {
         }
     }
 }
+
