@@ -16,7 +16,7 @@ func execute(_ req:[String:Any]) async -> [String:Any] {
     let args=req["arguments"] as? [String:Any] ?? [:]
     if name=="desktop_permissions" { return check() }
     if name=="desktop_request_screen_recording" {
-        let granted = CGRequestScreenCaptureAccess()
+        let granted = await MainActor.run { CGRequestScreenCaptureAccess() }
         return ["screen_recording": granted, "permission_subject": "HomeMCP.Desktop", "restart_may_be_required": !granted]
     }
     if name=="desktop_screenshot" {
@@ -170,8 +170,14 @@ if Bundle.main.bundleIdentifier == "si.homemcp.desktop" {
         print("DESKTOP_APP_SCREEN_RECORDING_GRANTED=\(granted)")
         exit(granted ? 0 : 1)
     }
-    serve(socketPath: directory.appendingPathComponent("desktop-login.sock").path)
-    exit(0)
+    // The login item owns a real AppKit run loop. Blocking Unix IPC runs off-main;
+    // asynchronous ScreenCaptureKit work can then dispatch to the main actor.
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    DispatchQueue.global(qos: .userInitiated).async {
+        serve(socketPath: directory.appendingPathComponent("desktop-login.sock").path)
+    }
+    app.run()
 }
 if CommandLine.arguments.contains("--serve-default") {
     let home = FileManager.default.homeDirectoryForCurrentUser

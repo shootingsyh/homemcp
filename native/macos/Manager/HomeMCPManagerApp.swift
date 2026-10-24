@@ -6,6 +6,16 @@ import ServiceManagement
 @main
 struct HomeMCPManagerApp: App {
     init() {
+        if CommandLine.arguments.contains("--unregister-desktop-login-item") {
+            do {
+                try SMAppService.loginItem(identifier: "si.homemcp.desktop").unregister()
+                print("DESKTOP_LOGIN_ITEM_UNREGISTERED")
+                exit(0)
+            } catch {
+                fputs("DESKTOP_LOGIN_ITEM_UNREGISTER_FAILED: \(error)\n", stderr)
+                exit(1)
+            }
+        }
         if CommandLine.arguments.contains("--register-desktop-login-item") {
             do {
                 try SMAppService.loginItem(identifier: "si.homemcp.desktop").register()
