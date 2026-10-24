@@ -15,6 +15,8 @@ cat > "$DEST/Info.plist" <<'PLIST'
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>si.homemcp.manager</string>
 <key>CFBundleExecutable</key><string>HomeMCP.Manager</string>
+<key>CFBundleShortVersionString</key><string>0.1.28</string>
+<key>CFBundleVersion</key><string>28</string>
 <key>CFBundleName</key><string>HomeMCP Manager</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
