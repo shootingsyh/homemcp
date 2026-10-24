@@ -2,43 +2,41 @@ import SwiftUI
 import Foundation
 import AppKit
 import ServiceManagement
+import CoreGraphics
 
 @main
 struct HomeMCPManagerApp: App {
     init() {
-        if CommandLine.arguments.contains("--unregister-desktop-login-item") {
-            do {
-                try SMAppService.loginItem(identifier: "si.homemcp.desktop").unregister()
-                print("DESKTOP_LOGIN_ITEM_UNREGISTERED")
-                exit(0)
-            } catch {
-                fputs("DESKTOP_LOGIN_ITEM_UNREGISTER_FAILED: \(error)\n", stderr)
-                exit(1)
-            }
-        }
-        if CommandLine.arguments.contains("--register-desktop-login-item") {
-            do {
-                try SMAppService.loginItem(identifier: "si.homemcp.desktop").register()
-                print("DESKTOP_LOGIN_ITEM_REGISTRATION_OK")
-                exit(0)
-            } catch {
-                fputs("DESKTOP_LOGIN_ITEM_REGISTRATION_FAILED: \(error)\n", stderr)
-                exit(1)
-            }
-        }
-        if CommandLine.arguments.contains("--register-desktop-service") {
-            do {
-                try SMAppService.agent(plistName: "si.homemcp.desktop.plist").register()
-                print("DESKTOP_SERVICE_REGISTRATION_OK")
-                exit(0)
-            } catch {
-                fputs("DESKTOP_SERVICE_REGISTRATION_FAILED: \(error)\n", stderr)
-                exit(1)
-            }
+        // Desktop IPC lives in the primary app so macOS TCC attributes access
+        // to the same bundle the user authorizes in System Settings.
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/HomeMCP", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        DispatchQueue.global(qos: .userInitiated).async {
+            serve(socketPath: directory.appendingPathComponent("desktop-manager.sock").path)
         }
     }
     var body: some Scene {
-        WindowGroup("HomeMCP") { SetupView().frame(minWidth: 580, minHeight: 440) }
+        WindowGroup("HomeMCP", id: "manager") {
+            SetupView().frame(minWidth: 580, minHeight: 440)
+        }
+        MenuBarExtra("HomeMCP", systemImage: "display") {
+            ManagerMenu()
+        }
+    }
+}
+
+struct ManagerMenu: View {
+    @Environment(\\.openWindow) private var openWindow
+    var body: some View {
+        Button("Open HomeMCP Manager") { openWindow(id: "manager") }
+        Divider()
+        Button("Request Screen Recording") { _ = CGRequestScreenCaptureAccess() }
+        Button("Open Screen Recording Settings") {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+        }
+        Divider()
+        Button("Quit HomeMCP") { NSApplication.shared.terminate(nil) }
     }
 }
 
