@@ -524,6 +524,7 @@ sealed partial class TrayContext : ApplicationContext {
   statusLabel=new Label{Text=Status,AutoSize=true,MaximumSize=new Size(640,0),Font=new Font("Segoe UI",10,FontStyle.Bold)};
   content.Controls.Add(statusLabel);
   AddConnectionSection(content);
+  AddDesktopTestSection(content,form,smoke);
   var actions=new FlowLayoutPanel{Width=630,AutoSize=true,WrapContents=true};
   var start=new Button{Text="Start",Width=100,AutoSize=true,MinimumSize=new Size(100,32)};start.Click+=(_,_)=>{Start();_=ProbeHealth();};
   var stop=new Button{Text="Stop",Width=100,AutoSize=true,MinimumSize=new Size(100,32)};stop.Click+=(_,_)=>{Stop();_=ProbeHealth();};
