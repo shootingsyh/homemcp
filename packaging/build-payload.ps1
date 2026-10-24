@@ -59,6 +59,11 @@ foreach ($name in @('pywintypes314.dll','pythoncom314.dll')) {
 & (Join-Path $worker 'python.exe') (Join-Path $root 'scripts\patch-windows-snapshot.py') (Join-Path $worker 'site-packages')
 if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP snapshot overlay patch failed' }
 
+& (Join-Path $worker 'python.exe') (Join-Path $root 'scripts\patch-windows-powershell.py') (Join-Path $worker 'site-packages')
+if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP background command capture patch failed' }
+& (Join-Path $worker 'python.exe') (Join-Path $root 'test\test_windows_powershell_capture.py')
+if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP background command regression failed' }
+
 & (Join-Path $worker 'python.exe') -c "import windows_mcp; print('BUNDLED_WINDOWS_MCP_OK')"
 if ($LASTEXITCODE -ne 0) { throw 'Embedded Python smoke test failed' }
 dotnet publish "$root\native\Manager\Manager.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$root\build\manager"
