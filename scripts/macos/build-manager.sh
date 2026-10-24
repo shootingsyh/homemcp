@@ -9,14 +9,32 @@ swiftc -parse-as-library "$ROOT/native/macos/Manager/HomeMCPManagerApp.swift" \
 mkdir -p "$ROOT/build/macos-keychain"
 swiftc "$ROOT/native/macos/keychain-helper.swift" -o "$ROOT/build/macos-keychain/home-mcp-keychain" -framework Security
 swiftc "$ROOT/native/macos/desktop-helper.swift" -o "$DEST/MacOS/HomeMCP.Desktop" -framework AppKit -framework ApplicationServices -framework CoreGraphics
+# Desktop is an independent LSUIElement application, bundled as an SMAppService login item.
+DESKTOP_APP="$DEST/Library/LoginItems/HomeMCP Desktop.app/Contents"
+mkdir -p "$DESKTOP_APP/MacOS"
+cp "$DEST/MacOS/HomeMCP.Desktop" "$DESKTOP_APP/MacOS/HomeMCP.Desktop"
+cat > "$DESKTOP_APP/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>si.homemcp.desktop</string>
+<key>CFBundleExecutable</key><string>HomeMCP.Desktop</string>
+<key>CFBundleName</key><string>HomeMCP Desktop</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.1.29</string>
+<key>CFBundleVersion</key><string>29</string>
+<key>LSUIElement</key><true/>
+<key>LSMinimumSystemVersion</key><string>13.0</string>
+</dict></plist>
+PLIST
 cat > "$DEST/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>si.homemcp.manager</string>
 <key>CFBundleExecutable</key><string>HomeMCP.Manager</string>
-<key>CFBundleShortVersionString</key><string>0.1.28</string>
-<key>CFBundleVersion</key><string>28</string>
+<key>CFBundleShortVersionString</key><string>0.1.29</string>
+<key>CFBundleVersion</key><string>29</string>
 <key>CFBundleName</key><string>HomeMCP Manager</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>

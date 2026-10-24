@@ -159,6 +159,20 @@ func serve(socketPath: String) {
         close(client)
     }
 }
+// As an embedded login item, the native Desktop.app is the TCC permission subject.
+// Use a separate socket until explicitly migrated from the previous agent.
+if Bundle.main.bundleIdentifier == "si.homemcp.desktop" {
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let directory = home.appendingPathComponent("Library/Application Support/HomeMCP", isDirectory: true)
+    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    if CommandLine.arguments.contains("--request-screen-recording") {
+        let granted = CGRequestScreenCaptureAccess()
+        print("DESKTOP_APP_SCREEN_RECORDING_GRANTED=\(granted)")
+        exit(granted ? 0 : 1)
+    }
+    serve(socketPath: directory.appendingPathComponent("desktop-login.sock").path)
+    exit(0)
+}
 if CommandLine.arguments.contains("--serve-default") {
     let home = FileManager.default.homeDirectoryForCurrentUser
     let directory = home.appendingPathComponent("Library/Application Support/HomeMCP", isDirectory: true)

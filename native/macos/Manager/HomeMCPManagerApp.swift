@@ -6,6 +6,16 @@ import ServiceManagement
 @main
 struct HomeMCPManagerApp: App {
     init() {
+        if CommandLine.arguments.contains("--register-desktop-login-item") {
+            do {
+                try SMAppService.loginItem(identifier: "si.homemcp.desktop").register()
+                print("DESKTOP_LOGIN_ITEM_REGISTRATION_OK")
+                exit(0)
+            } catch {
+                fputs("DESKTOP_LOGIN_ITEM_REGISTRATION_FAILED: \(error)\n", stderr)
+                exit(1)
+            }
+        }
         if CommandLine.arguments.contains("--register-desktop-service") {
             do {
                 try SMAppService.agent(plistName: "si.homemcp.desktop.plist").register()
