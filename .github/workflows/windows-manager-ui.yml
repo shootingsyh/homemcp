@@ -1,0 +1,39 @@
+name: Windows Manager UI
+on:
+  pull_request:
+    paths:
+      - 'native/Manager/**'
+      - '.github/workflows/windows-manager-ui.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ui:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet build native/Manager/Manager.csproj -c Release
+      - name: Exercise real wizard, dashboard and connection guide
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $exe=(Get-ChildItem native/Manager/bin/Release -Recurse -Filter HomeMCP.Manager.exe | Select-Object -First 1).FullName
+          $env:HOMEMCP_UI_SMOKE='1'
+          foreach($page in @('wizard','dashboard')) {
+            $env:HOMEMCP_UI_SMOKE_PAGE=$page
+            $env:HOMEMCP_UI_SMOKE_MARKER=Join-Path $env:RUNNER_TEMP "$page.ready"
+            $env:HOMEMCP_UI_SMOKE_SCREENSHOT=Join-Path $env:RUNNER_TEMP "$page.png"
+            $p=Start-Process $exe -PassThru
+            try {
+              if(!$p.WaitForExit(15000)){throw "UI timeout: $page"}
+              if($p.ExitCode -ne 0 -or !(Test-Path $env:HOMEMCP_UI_SMOKE_MARKER)){throw "UI failed: $page"}
+            } finally { if(!$p.HasExited){Stop-Process -Id $p.Id} }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-manager-ui
+          path: |
+            ${{ runner.temp }}/*.png
