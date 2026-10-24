@@ -8,6 +8,7 @@ import ApplicationServices
 @main
 struct HomeMCPManagerApp: App {
     init() {
+        if ProcessInfo.processInfo.environment["HOMEMCP_UI_SMOKE"] == "1" { return }
         // Desktop IPC lives in the primary app so macOS TCC attributes access
         // to the same bundle the user authorizes in System Settings.
         let directory = FileManager.default.homeDirectoryForCurrentUser
@@ -50,6 +51,17 @@ struct WizardCheck: Decodable {
     let connectionMode: String
 }
 
+struct DesktopSelfTestReport: Decodable {
+    struct Check: Decodable {
+        let name: String
+        let state: String
+        let detail: String
+        let nextStep: String?
+    }
+    let ready: Bool
+    let checks: [Check]
+}
+
 struct SetupView: View {
     @AppStorage("homemcp.wizard.complete") private var completed = false
     @State private var step = 0
@@ -60,6 +72,9 @@ struct SetupView: View {
     @State private var feedback = "Welcome. Your existing device data will be preserved."
     @State private var running = false
     @State private var connectionGuide: String? = nil
+    @State private var desktopReport: DesktopSelfTestReport?
+    @State private var desktopChecking = false
+    @State private var desktopTestError: String?
 
     private let managedNotice = """
     Privacy & Responsibility
@@ -184,6 +199,11 @@ struct SetupView: View {
         )) { selection in
             connectionGuideSheet(selection.id)
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if completed && !running && desktopReport != nil && desktopReport?.ready != true {
+                testDesktop()
+            }
+        }
         .onChange(of: step) { _, newStep in
             if newStep == 2 && !completed &&
                ProcessInfo.processInfo.environment["HOMEMCP_UI_SMOKE"] != "1" {
@@ -209,8 +229,9 @@ struct SetupView: View {
     }
 
     private var dashboard: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 14) {
-            Text("HomeMCP is ready").font(.title2).bold()
+            Text(desktopReport?.ready == true ? "HomeMCP is ready" : "Phone connected · verify desktop access").font(.title2).bold()
             Text("Next: connect an AI client to use this computer remotely.")
                 .foregroundStyle(.secondary)
             if let endpoint = mcpEndpoint {
@@ -240,9 +261,30 @@ struct SetupView: View {
                 Button("Manage devices") { openLocal("/passkeys") }
             }.disabled(running)
             Divider()
-            Text("Desktop control permissions").font(.headline)
-            Text("Enable Screen Recording and Accessibility for HomeMCP Manager. Quit and reopen Manager if macOS asks.")
+            Text("Desktop access test").font(.headline)
+            Text("Grant Access starts the macOS permission flow. Finish the system confirmations, then verify that screen capture and window reading actually work.")
                 .font(.footnote).foregroundStyle(.secondary)
+            if let report = desktopReport {
+                ForEach(report.checks, id: \.name) { check in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label((check.name == "screenshot" ? "Screenshot" : (check.name == "window" ? "Window reading" : "Manager")) + ": " + check.state.replacingOccurrences(of: "_", with: " "),
+                              systemImage: check.state == "passed" ? "checkmark.circle.fill" : "exclamationmark.circle")
+                        if let nextStep = check.nextStep { Text(nextStep).font(.footnote) }
+                    }
+                }
+            }
+            if let desktopTestError { Text(desktopTestError).font(.footnote).foregroundStyle(.red) }
+            HStack {
+                if desktopReport?.checks.contains(where: { $0.state == "permission_required" }) == true {
+                    Button("Grant Missing Access") {
+                        if desktopReport?.checks.contains(where: { $0.name == "screenshot" && $0.state == "permission_required" }) == true {
+                            requestDesktopScreenRecording()
+                        } else { requestAccessibility() }
+                    }.disabled(desktopChecking || running)
+                }
+                Button(desktopChecking ? "Testing Desktop…" : "Test Desktop Again") { testDesktop() }
+                    .disabled(desktopChecking || running)
+            }
             HStack {
                 Button("Request Accessibility") { requestAccessibility() }
                 Button("Accessibility Settings") { openPrivacySettings("Privacy_Accessibility") }
@@ -265,6 +307,7 @@ struct SetupView: View {
                     feedback = "Wizard restarted. Existing local data was not deleted."
                 }
             }
+        }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -381,6 +424,25 @@ struct SetupView: View {
         NSWorkspace.shared.open(url)
     }
 
+    private func testDesktop() {
+        guard !desktopChecking else { return }
+        desktopChecking = true
+        desktopTestError = nil
+        let executable = nodePath
+        let script = URL(fileURLWithPath: appRoot).appendingPathComponent("scripts/macos/desktop-self-test.mjs").path
+        Task {
+            let result = await Task.detached { ScriptRunner.execute(executable, [script]) }.value
+            desktopChecking = false
+            guard result.code == 0, let data = result.output.data(using: .utf8),
+                  let report = try? JSONDecoder().decode(DesktopSelfTestReport.self, from: data) else {
+                desktopReport = nil
+                desktopTestError = "Desktop test could not finish. Reopen Manager and test again."
+                return
+            }
+            desktopReport = report
+        }
+    }
+
     private func checkWizard(advance: Bool) {
         running = true
         let executable = nodePath
@@ -400,6 +462,7 @@ struct SetupView: View {
             if state.complete {
                 completed = true
                 feedback = "Connected: " + state.origin + " · Passkeys: \(state.passkeyCount)"
+                testDesktop()
             } else {
                 completed = false
                 if !state.origin.isEmpty {
