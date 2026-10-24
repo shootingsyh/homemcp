@@ -21,8 +21,8 @@ cat > "$DESKTOP_APP/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>HomeMCP.Desktop</string>
 <key>CFBundleName</key><string>HomeMCP Desktop</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.29</string>
-<key>CFBundleVersion</key><string>29</string>
+<key>CFBundleShortVersionString</key><string>0.1.30</string>
+<key>CFBundleVersion</key><string>30</string>
 <key>LSUIElement</key><true/>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict></plist>
@@ -33,8 +33,8 @@ cat > "$DEST/Info.plist" <<'PLIST'
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>si.homemcp.manager</string>
 <key>CFBundleExecutable</key><string>HomeMCP.Manager</string>
-<key>CFBundleShortVersionString</key><string>0.1.29</string>
-<key>CFBundleVersion</key><string>29</string>
+<key>CFBundleShortVersionString</key><string>0.1.30</string>
+<key>CFBundleVersion</key><string>30</string>
 <key>CFBundleName</key><string>HomeMCP Manager</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
