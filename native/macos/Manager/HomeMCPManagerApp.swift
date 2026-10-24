@@ -27,7 +27,7 @@ struct HomeMCPManagerApp: App {
 }
 
 struct ManagerMenu: View {
-    @Environment(\\.openWindow) private var openWindow
+    @Environment(\.openWindow) private var openWindow
     var body: some View {
         Button("Open HomeMCP Manager") { openWindow(id: "manager") }
         Divider()
