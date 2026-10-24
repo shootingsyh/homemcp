@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'native/Manager/**'
+      - 'scripts/*update*'
+      - 'test/windows-update-transaction.ps1'
       - '.github/workflows/windows-manager-ui.yml'
   workflow_dispatch:
 permissions:
@@ -16,6 +18,9 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - run: dotnet build native/Manager/Manager.csproj -c Release
+      - name: Exercise update state transitions and failure gates
+        shell: powershell
+        run: .\test\windows-update-transaction.ps1
       - name: Exercise real wizard, dashboard and connection guide
         shell: pwsh
         run: |

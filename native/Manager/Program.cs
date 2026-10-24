@@ -55,6 +55,7 @@ sealed partial class TrayContext : ApplicationContext {
   menu.Items.Add("Open HomeMCP Manager",null,(_,_)=>OpenSettings());
   menu.Items.Add("Connect ChatGPT…",null,(_,_)=>OpenConnectionGuide(false));
   menu.Items.Add("Connect Muse…",null,(_,_)=>OpenConnectionGuide(true));
+  menu.Items.Add("Update HomeMCP…",null,(_,_)=>OpenUpdates());
   menu.Items.Add("Start",null,(_,_)=>Start());
   menu.Items.Add("Stop",null,(_,_)=>Stop());
   menu.Items.Add("Restart",null,(_,_)=>{Stop();Start();});
@@ -89,6 +90,16 @@ sealed partial class TrayContext : ApplicationContext {
        bitmap.Save(guideImage+".guide.png",System.Drawing.Imaging.ImageFormat.Png);
       }
       guide.Close();
+      using var updates=new UpdateForm(app,dir);
+      updates.Show();controls.Clear();Collect(updates);
+      if(!controls.OfType<Button>().Any(x=>x.Text=="Validate and install local MSI…"))throw new Exception("update_local_install_missing");
+      if(!controls.OfType<CheckBox>().Any())throw new Exception("update_automatic_option_missing");
+      if(!String.IsNullOrEmpty(guideImage)){
+       using var bitmap=new Bitmap(updates.Width,updates.Height);
+       updates.DrawToBitmap(bitmap,new Rectangle(0,0,bitmap.Width,bitmap.Height));
+       bitmap.Save(guideImage+".update.png",System.Drawing.Imaging.ImageFormat.Png);
+      }
+      updates.Close();
      }else{
      if(!controls.OfType<Button>().Any(x=>x.Text=="Continue"))throw new Exception("wizard_continue_missing");
      if(!controls.OfType<Label>().Any(x=>x.Text.Contains("Choose connection")))throw new Exception("wizard_first_page_missing");
@@ -662,6 +673,7 @@ sealed partial class TrayContext : ApplicationContext {
        "stop"=>ApplyStop(),
        "restart"=>ApplyRestart(),
        "settings"=>ApplySettings(),
+       "prepare-update"=>ApplyPrepareUpdate(),
        _=>"ERROR unsupported command"
       };
       tcs.TrySetResult(result);
@@ -674,6 +686,12 @@ sealed partial class TrayContext : ApplicationContext {
   }
  }
  readonly Control formDispatcher=new Control();
+ string ApplyPrepareUpdate(){
+  monitor.Stop();Stop();
+  var exitTimer=new System.Windows.Forms.Timer{Interval=1500};
+  exitTimer.Tick+=(_,_)=>{exitTimer.Stop();cancel.Cancel();supervisor.Dispose();tray.Visible=false;ExitThread();};
+  exitTimer.Start();return "UPDATE_READY";
+ }
  string ApplyStart(){Start();return Status;}
  string ApplyStop(){Stop();return Status;}
  string ApplyRestart(){Stop();Start();return Status;}
