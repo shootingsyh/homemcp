@@ -20,14 +20,8 @@ find "$RES" -type f | while IFS= read -r item; do
     *Mach-O*) sign_one "$item" ;;
   esac
 done
-sign_one "$APP/Contents/MacOS/HomeMCP.Desktop"
-# The login item is an actual nested .app with a stable independent bundle ID.
-LOGIN_ITEM="$APP/Contents/Library/LoginItems/HomeMCP Desktop.app"
-/usr/bin/codesign --force --sign "$IDENTITY" --options runtime "$LOGIN_ITEM"
-/usr/bin/codesign --verify --strict --verbose=2 "$LOGIN_ITEM"
-
 # Main executable is sealed as part of the bundle signature.
  /usr/bin/codesign --force --sign "$IDENTITY" --options runtime "$APP"
  /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
- /usr/bin/codesign -dv --verbose=4 "$APP/Contents/MacOS/HomeMCP.Desktop" 2>&1 | grep -E 'Signature=|Authority=|TeamIdentifier=|Runtime Version'
-echo "Signed HomeMCP Manager and nested desktop helper with $IDENTITY"
+ /usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 | grep -E 'Signature=|Authority=|TeamIdentifier=|Runtime Version'
+echo "Signed HomeMCP Manager (native desktop IPC in-process) with $IDENTITY"
