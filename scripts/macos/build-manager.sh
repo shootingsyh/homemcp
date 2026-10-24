@@ -21,6 +21,7 @@ cat > "$DEST/Info.plist" <<'PLIST'
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSScreenCaptureUsageDescription</key><string>HomeMCP captures your screen when you explicitly request remote desktop assistance.</string>
 </dict></plist>
 PLIST
 # Developer build locates project resources without requiring a packaged copy.
