@@ -59,6 +59,11 @@ foreach ($name in @('pywintypes314.dll','pythoncom314.dll')) {
 & (Join-Path $worker 'python.exe') (Join-Path $root 'scripts\patch-windows-snapshot.py') (Join-Path $worker 'site-packages')
 if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP snapshot overlay patch failed' }
 
+& (Join-Path $worker 'python.exe') (Join-Path $root 'scripts\patch-windows-indicator.py') (Join-Path $worker 'site-packages')
+if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP indicator progress patch failed' }
+& (Join-Path $worker 'python.exe') (Join-Path $root 'test\test_windows_indicator_bitmap.py')
+if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP indicator/GDI regression failed' }
+
 & (Join-Path $worker 'python.exe') (Join-Path $root 'scripts\patch-windows-powershell.py') (Join-Path $worker 'site-packages')
 if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP background command capture patch failed' }
 & (Join-Path $worker 'python.exe') (Join-Path $root 'test\test_windows_powershell_capture.py')
