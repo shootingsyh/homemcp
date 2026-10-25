@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {validateDeletionPath} from '../src/platform/file-security.mjs';
 
-test('POSIX file deletion allows regular file within home',()=>{
+test('POSIX file deletion allows regular file within home',{skip:process.platform==='win32'},()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'homemcp-files-'));
  try {
   const file=path.join(root,'inside.txt');fs.writeFileSync(file,'ok');
