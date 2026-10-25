@@ -51,7 +51,7 @@ test('no focused application prompts a retry rather than declaring success', asy
  assert.match(report.checks[1].nextStep, /Finder/);
 });
 
-test('socket client handles fragmented JSON and bounds a stalled request', async t => {
+test('socket client handles fragmented JSON and bounds a stalled request', {skip:process.platform === 'win32'}, async t => {
  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hmc-test-'));
  const socketPath = path.join(dir, 'desktop.sock');
  const clients = new Set();
