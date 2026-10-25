@@ -9,3 +9,11 @@ The packaged Windows-MCP PowerShell executor now captures output into temporary 
 Three real Windows tests cover short output, detached-child survival with early response, and foreground timeout. A real HomeMCP background launch of a 20-second dummy child returned promptly and the next PowerShell call succeeded while the child was still running. The user's training was not relaunched or terminated.
 
 This patch does not remove the separate 15-second Host-to-worker request deadline. Foreground commands deliberately exceeding that limit still need asynchronous process/session support or coordinated deadline handling. It also does not provide the missing per-command request/PID audit records.
+
+## Screenshot followed by Snapshot: flash-window race
+
+A real isolated MCP worker reproduced Screenshot succeeding in about 0.5 seconds while the following Snapshot exceeded 7 seconds. faulthandler located the UIA lane in ControlFromHandle / IUIAutomation.ElementFromHandle. A Win32-only trace identified an own-process WindowsMCPFlash_* HWND entering the traversal, followed by repeated UIA lookups after that flash window had been destroyed. The existing exclusion covered WindowsMCPControl_* but missed screenshot flashes. Retrying a destroyed HWND and querying its UIA name in the error handler could exceed the Host's 15-second deadline.
+
+The packaging patch now excludes both internal class prefixes before UIA and rechecks validity at each retry and before error-reporting UIA. It does not hide ordinary Python applications, disable flash/control indicators, change approval/input ownership, or increase timeouts. Five Python regression cases cover class filtering, dead handles, idempotent upgrades and no retry/error-name lookup after a window disappears.
+
+Live validation after applying the patch and restarting only the desktop worker: local screenshot/window self-test passed; remote Snapshot returned successfully and a subsequent PowerShell hostname command succeeded. The running Host, relay and training processes were preserved. This follow-up patch is newer than the 0.1.34 development installers already published.

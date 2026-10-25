@@ -13,7 +13,7 @@ GUARD = '''import win32gui
 def is_internal_control_window(handle):
     """Use Win32 only: querying UIA here could enter the blocked provider."""
     try:
-        return win32gui.GetClassName(handle).startswith("WindowsMCPControl_")
+        return win32gui.GetClassName(handle).startswith(("WindowsMCPControl_", "WindowsMCPFlash_"))
     except Exception:
         # A destroyed HWND is not a valid capture target.
         return True
@@ -23,7 +23,7 @@ IMPORT = 'from windows_mcp.homemcp_snapshot_guard import is_internal_control_win
 
 def transform(source, kind):
     if IMPORT.strip() in source:
-        return source
+        return upgrade_tree_retries(source) if kind == 'tree' else source
     if kind == 'desktop':
         replacements = [
             ('                    win32gui.IsWindow(hwnd)\n',
@@ -51,8 +51,30 @@ def transform(source, kind):
     lines = source.splitlines(keepends=True)
     lines.insert(position, IMPORT)
     result = ''.join(lines)
+    if kind == 'tree':
+        result = upgrade_tree_retries(result)
     ast.parse(result)
     return result
+
+
+def upgrade_tree_retries(source):
+    # HWNDs can disappear after enumeration. Retrying a destroyed HWND cannot
+    # recover it, and even the error-logging UIA lookup can stall the queue.
+    before = '            for attempt in range(THREAD_MAX_RETRIES + 1):\n'
+    after = before + '                if is_internal_control_window(handle):\n                    break\n'
+    if after not in source:
+        if source.count(before) != 1:
+            raise RuntimeError('Unsupported windows-mcp tree retry loop')
+        source = source.replace(before, after, 1)
+    before = '                except Exception as e:\n                    retry_counts[handle] = attempt + 1\n'
+    after = ('                except Exception as e:\n'
+             '                    if is_internal_control_window(handle):\n                        break\n'
+             '                    retry_counts[handle] = attempt + 1\n')
+    if after not in source:
+        if source.count(before) != 1:
+            raise RuntimeError('Unsupported windows-mcp tree retry error handler')
+        source = source.replace(before, after, 1)
+    return source
 
 
 def apply(site_packages):
