@@ -19,8 +19,7 @@ chmod 600 "$PLIST"
 /bin/launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
 /bin/launchctl bootstrap "gui/$(id -u)" "$PLIST"
 /bin/launchctl kickstart -k "gui/$(id -u)/$LABEL"
-# Desktop is now managed as an independent SMAppService login item.
-# Never recreate the legacy launch agent (it conflicts with the login item label).
-# The dedicated login item is registered by Manager after installation.
-# Preserve the existing desktop agent until explicit migration completes.
-echo "HomeMCP Host LaunchAgent activated; Desktop login item registration is separate."
+# Desktop IPC belongs to the primary Manager. Open that exact signed bundle
+# through LaunchServices in the logged-in GUI session, including on later logins.
+"$NODE" "$ROOT/scripts/macos/manager-launch-agent.mjs"
+echo "HomeMCP Host and Manager login LaunchAgents activated."
