@@ -53,6 +53,7 @@ sealed partial class TrayContext : ApplicationContext {
   tray=new NotifyIcon {Icon=SystemIcons.Application,Text="HomeMCP",Visible=true};
   var menu=new ContextMenuStrip();
   menu.Items.Add("Open HomeMCP Manager",null,(_,_)=>OpenSettings());
+  menu.Items.Add("Change domain…",null,(_,_)=>OpenDomainSettings());
   menu.Items.Add("Connect ChatGPT…",null,(_,_)=>OpenConnectionGuide(false));
   menu.Items.Add("Connect Muse…",null,(_,_)=>OpenConnectionGuide(true));
   menu.Items.Add("Update HomeMCP…",null,(_,_)=>OpenUpdates());
@@ -175,9 +176,11 @@ sealed partial class TrayContext : ApplicationContext {
  }
  async Task MonitorCycle(){
   if(monitoring)return;
+  if(managedSetupBusy)return;
   monitoring=true;
   try{
    await ProbeHealth();
+   if(managedSetupBusy)return;
    bool hostHealthy=LastHealth.StartsWith("Healthy",StringComparison.Ordinal);
    hostFailures=hostHealthy?0:hostFailures+1;
    bool bridgeHealthy=await CheckBridge(false);
@@ -358,6 +361,7 @@ sealed partial class TrayContext : ApplicationContext {
   RefreshStatus();
  }
  void TryStartOracleTunnel(){
+  try{if(JsonNode.Parse(File.ReadAllText(ConfigPath))?["connectionMode"]?.GetValue<string>()=="byot")return;}catch{}
   var node=Path.Combine(app,"runtime","node.exe");
   var helper=Path.Combine(app,"scripts","oracle-manager-config.mjs");
   var dll=Path.Combine(AppContext.BaseDirectory,"homemcp-frp.dll");
@@ -524,6 +528,7 @@ sealed partial class TrayContext : ApplicationContext {
   statusLabel=new Label{Text=Status,AutoSize=true,MaximumSize=new Size(640,0),Font=new Font("Segoe UI",10,FontStyle.Bold)};
   content.Controls.Add(statusLabel);
   AddConnectionSection(content);
+  var changeDomain=new Button{Text="Change domain…",Width=190,Height=35};changeDomain.Click+=(_,_)=>OpenDomainSettings();content.Controls.Add(changeDomain);
   AddDesktopTestSection(content,form,smoke);
   var actions=new FlowLayoutPanel{Width=630,AutoSize=true,WrapContents=true};
   var start=new Button{Text="Start",Width=100,AutoSize=true,MinimumSize=new Size(100,32)};start.Click+=(_,_)=>{Start();_=ProbeHealth();};
@@ -584,13 +589,13 @@ sealed partial class TrayContext : ApplicationContext {
    page.Controls.Add(body);
    if(step==0){
     var byot=new RadioButton{Text="Bring Your Own Tunnel (free)",Checked=choice=="external",AutoSize=true};
-    var managed=new RadioButton{Text="HomeMCP Managed (existing enrollment)",Checked=choice=="managed",AutoSize=true};
+    var managed=new RadioButton{Text="HomeMCP Managed (subscription)",Checked=choice=="managed",AutoSize=true};
     byot.CheckedChanged+=(_,_)=>{if(byot.Checked)choice="external";};
     managed.CheckedChanged+=(_,_)=>{if(managed.Checked)choice="managed";};
     body.Controls.Add(byot);body.Controls.Add(managed);
-    body.Controls.Add(new Label{Width=570,Height=90,Text="BYOT: configure your own public HTTPS domain and tunnel. Managed: use a previously enrolled HomeMCP domain. New paid Managed enrollment is not yet available from this wizard."});
+    body.Controls.Add(new Label{Width=570,Height=90,Text="BYOT: use your own domain and tunnel. Managed: choose a HomeMCP domain, complete subscription checkout if needed, and let HomeMCP connect automatically."});
    }else if(step==1){
-    body.Controls.Add(new Label{Width=565,Height=60,Text=choice=="external"?"Configure your own HTTPS tunnel so it routes to this local HomeMCP, then bind and verify the public origin.":"Only existing Managed enrollments can continue. This wizard cannot purchase or register a new Managed domain."});
+    body.Controls.Add(new Label{Width=565,Height=60,Text=choice=="external"?"Configure your own HTTPS tunnel so it routes to this local HomeMCP, then bind and verify the public origin.":"Choose or reconnect a managed domain below. Payment is completed in Stripe Checkout; credentials and certificates are prepared automatically."});
     var existing=ReadState()["url"]?.GetValue<string>()??"";
     if(String.IsNullOrWhiteSpace(existing)){
      try{existing=JsonNode.Parse(File.ReadAllText(ConfigPath))?["publicUrl"]?.GetValue<string>()??"";}catch{}
@@ -601,6 +606,9 @@ sealed partial class TrayContext : ApplicationContext {
      body.Controls.Add(new Label{Width=570,Height=65,Text="Verification checks DNS, TLS, a local nonce challenge, OAuth issuer and MCP resource metadata. The next page is locked until verification passes."});
     }else{
      domainBox.ReadOnly=true;
+     var choose=new Button{Text="Choose / reconnect managed domain…",Width=335,Height=36};
+     choose.Click+=(_,_)=>OpenManagedSetup(value=>{domainBox.Text=value;message.Text="Managed tunnel connected. Continue to register your trusted device.";});
+     body.Controls.Add(choose);
      body.Controls.Add(new Label{Width=570,Height=65,Text="An existing Managed domain and local Host identity are required. Confirm that the Managed tunnel is active before registering a Passkey."});
     }
    }else{
@@ -630,7 +638,7 @@ sealed partial class TrayContext : ApplicationContext {
        // SaveHostname is the existing domain-rebind implementation. Do not alter
        // user configuration if they cancel its explicit confirmation dialog.
        hostnameBox=domainBox;
-       SaveHostname();
+       await BindExternalDomain(origin);
        hostnameBox=null;
       }
       var saved=ReadState()["url"]?.GetValue<string>()??"";
