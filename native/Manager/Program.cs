@@ -18,13 +18,13 @@ namespace HomeMCP.Manager;
 
 static class Program {
  [STAThread] static void Main() {
-  using var single=new Mutex(true, @"Local\HomeMCP-Manager-SingleInstance", out bool owner);
+  using var single=new Mutex(true, Environment.GetEnvironmentVariable("HOMEMCP_UI_SMOKE")=="1"?@"Local\HomeMCP-Manager-UI-Smoke":@"Local\HomeMCP-Manager-SingleInstance", out bool owner);
   if(!owner)return;
   ApplicationConfiguration.Initialize();
   Application.Run(new TrayContext());
  }
 }
-sealed class TrayContext : ApplicationContext {
+sealed partial class TrayContext : ApplicationContext {
  readonly string app=Directory.GetParent(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar))!.FullName;
  readonly string dir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"HomeMCP");
  readonly NotifyIcon tray;
@@ -52,7 +52,10 @@ sealed class TrayContext : ApplicationContext {
   _=formDispatcher.Handle; // marshal pipe callbacks to the UI thread even with no window open
   tray=new NotifyIcon {Icon=SystemIcons.Application,Text="HomeMCP",Visible=true};
   var menu=new ContextMenuStrip();
-  menu.Items.Add("Settings",null,(_,_)=>OpenSettings());
+  menu.Items.Add("Open HomeMCP Manager",null,(_,_)=>OpenSettings());
+  menu.Items.Add("Connect ChatGPT…",null,(_,_)=>OpenConnectionGuide(false));
+  menu.Items.Add("Connect Muse…",null,(_,_)=>OpenConnectionGuide(true));
+  menu.Items.Add("Update HomeMCP…",null,(_,_)=>OpenUpdates());
   menu.Items.Add("Start",null,(_,_)=>Start());
   menu.Items.Add("Stop",null,(_,_)=>Stop());
   menu.Items.Add("Restart",null,(_,_)=>{Stop();Start();});
@@ -62,7 +65,9 @@ sealed class TrayContext : ApplicationContext {
   if(Environment.GetEnvironmentVariable("HOMEMCP_UI_SMOKE")=="1"){
    // Real WinForms startup/layout check in an isolated CI runner: no Host, relay,
    // credentials or monitoring are started.
+   var smokePage=Environment.GetEnvironmentVariable("HOMEMCP_UI_SMOKE_PAGE")??"wizard";
    OpenSetupWizard();
+   if(smokePage=="dashboard"){settings?.Close();OpenSettings(smoke:true);}
    var probe=new System.Windows.Forms.Timer{Interval=500};
    probe.Tick+=(_,_)=>{
     probe.Stop();
@@ -71,6 +76,31 @@ sealed class TrayContext : ApplicationContext {
      var controls=new System.Collections.Generic.List<Control>();
      void Collect(Control root){controls.Add(root);foreach(Control child in root.Controls)Collect(child);}
      Collect(settings);
+     if(smokePage=="dashboard"){
+      if(!controls.OfType<Button>().Any(x=>x.Text=="Connect ChatGPT · Step by step"))throw new Exception("dashboard_chatgpt_missing");
+      if(!controls.OfType<Button>().Any(x=>x.Text=="Connect Muse · Copy prompt"))throw new Exception("dashboard_muse_missing");
+      if(!controls.OfType<Button>().Any(x=>x.Text=="Show diagnostics"))throw new Exception("dashboard_diagnostics_missing");
+      var guide=new ConnectionGuideForm(false,"https://example.com/mcp");
+      guide.Show();
+      if(!guide.Controls.OfType<TableLayoutPanel>().Any())throw new Exception("connection_guide_missing");
+      var guideImage=Environment.GetEnvironmentVariable("HOMEMCP_UI_SMOKE_SCREENSHOT");
+      if(!String.IsNullOrEmpty(guideImage)){
+       using var bitmap=new Bitmap(guide.Width,guide.Height);
+       guide.DrawToBitmap(bitmap,new Rectangle(0,0,bitmap.Width,bitmap.Height));
+       bitmap.Save(guideImage+".guide.png",System.Drawing.Imaging.ImageFormat.Png);
+      }
+      guide.Close();
+      using var updates=new UpdateForm(app,dir);
+      updates.Show();controls.Clear();Collect(updates);
+      if(!controls.OfType<Button>().Any(x=>x.Text=="Validate and install local MSI…"))throw new Exception("update_local_install_missing");
+      if(!controls.OfType<CheckBox>().Any())throw new Exception("update_automatic_option_missing");
+      if(!String.IsNullOrEmpty(guideImage)){
+       using var bitmap=new Bitmap(updates.Width,updates.Height);
+       updates.DrawToBitmap(bitmap,new Rectangle(0,0,bitmap.Width,bitmap.Height));
+       bitmap.Save(guideImage+".update.png",System.Drawing.Imaging.ImageFormat.Png);
+      }
+      updates.Close();
+     }else{
      if(!controls.OfType<Button>().Any(x=>x.Text=="Continue"))throw new Exception("wizard_continue_missing");
      if(!controls.OfType<Label>().Any(x=>x.Text.Contains("Choose connection")))throw new Exception("wizard_first_page_missing");
      if(controls.OfType<Button>().Any(x=>x.Text.Contains("Passkey")||x.Text.Contains("Finish")))throw new Exception("wizard_future_steps_leaked");
@@ -78,6 +108,13 @@ sealed class TrayContext : ApplicationContext {
      controls.Clear();Collect(settings);
      if(!controls.OfType<Label>().Any(x=>x.Text.Contains("Verify your tunnel")))throw new Exception("wizard_step_two_missing");
      if(controls.OfType<Button>().Any(x=>x.Text.Contains("Passkey")))throw new Exception("wizard_passkey_visible_too_early");
+     }
+     var screenshot=Environment.GetEnvironmentVariable("HOMEMCP_UI_SMOKE_SCREENSHOT");
+     if(!String.IsNullOrEmpty(screenshot)){
+      using var bitmap=new Bitmap(settings.Width,settings.Height);
+      settings.DrawToBitmap(bitmap,new Rectangle(0,0,bitmap.Width,bitmap.Height));
+      bitmap.Save(screenshot,System.Drawing.Imaging.ImageFormat.Png);
+     }
      var marker=Environment.GetEnvironmentVariable("HOMEMCP_UI_SMOKE_MARKER");
      if(!String.IsNullOrEmpty(marker))File.WriteAllText(marker,"HOMEMCP_UI_READY");
     }catch(Exception e){Environment.ExitCode=1;Console.Error.WriteLine(e);}
@@ -476,25 +513,27 @@ sealed class TrayContext : ApplicationContext {
   var count=obj?["passkeyCount"]?.GetValue<int>()??0;
   return(origin.StartsWith("https://",StringComparison.OrdinalIgnoreCase),count,origin);
  }
- void OpenSettings(){
+ void OpenSettings(bool smoke=false){
   if(settings is {IsDisposed:false}){settings.Activate();return;}
-  if(!SetupDone){OpenSetupWizard();return;}
-  var form=new Form{Text="HomeMCP Control Center",Width=660,Height=490,StartPosition=FormStartPosition.CenterScreen};
+  if(!SetupDone&&!smoke){OpenSetupWizard();return;}
+  var form=new Form{Text="HomeMCP Manager",Width=760,Height=680,MinimumSize=new Size(660,580),AutoScaleMode=AutoScaleMode.Dpi,StartPosition=FormStartPosition.CenterScreen};
   settings=form;
   var content=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.TopDown,WrapContents=false,Padding=new Padding(22),AutoScroll=true};
-  statusLabel=new Label{Text=Status,AutoSize=true,Font=new Font("Segoe UI",12,FontStyle.Bold)};
+  content.Controls.Add(new Label{Text="HomeMCP",AutoSize=true,Font=new Font("Segoe UI",20,FontStyle.Bold)});
+  content.Controls.Add(new Label{Text="Connect your AI client to use this computer remotely.",AutoSize=true});
+  statusLabel=new Label{Text=Status,AutoSize=true,MaximumSize=new Size(640,0),Font=new Font("Segoe UI",10,FontStyle.Bold)};
   content.Controls.Add(statusLabel);
-  componentsLabel=new Label{Text=ComponentReport(),AutoSize=true,Font=new Font("Consolas",9)};
-  content.Controls.Add(componentsLabel);
-  var actions=new FlowLayoutPanel{Width=570,Height=45};
-  var start=new Button{Text="Start",Width=100};start.Click+=(_,_)=>{Start();_=ProbeHealth();};
-  var stop=new Button{Text="Stop",Width=100};stop.Click+=(_,_)=>{Stop();_=ProbeHealth();};
-  var restart=new Button{Text="Restart",Width=100};restart.Click+=(_,_)=>{Stop();Start();_=ProbeHealth();};
-  var check=new Button{Text="Check Health",Width=115};check.Click+=async (_,_)=>await ProbeHealth();
+  AddConnectionSection(content);
+  AddDesktopTestSection(content,form,smoke);
+  var actions=new FlowLayoutPanel{Width=630,AutoSize=true,WrapContents=true};
+  var start=new Button{Text="Start",Width=100,AutoSize=true,MinimumSize=new Size(100,32)};start.Click+=(_,_)=>{Start();_=ProbeHealth();};
+  var stop=new Button{Text="Stop",Width=100,AutoSize=true,MinimumSize=new Size(100,32)};stop.Click+=(_,_)=>{Stop();_=ProbeHealth();};
+  var restart=new Button{Text="Restart",Width=100,AutoSize=true,MinimumSize=new Size(100,32)};restart.Click+=(_,_)=>{Stop();Start();_=ProbeHealth();};
+  var check=new Button{Text="Check Status",Width=115,AutoSize=true,MinimumSize=new Size(115,32)};check.Click+=async (_,_)=>await ProbeHealth();
   actions.Controls.AddRange([start,stop,restart,check]);content.Controls.Add(actions);
-  var passkeyActions=new FlowLayoutPanel{Width=570,Height=45};
-  var add=new Button{Text="Add Device QR",Width=135};add.Click+=async (_,_)=>await OpenPasskeySetup();
-  var manage=new Button{Text="Manage Passkeys",Width=145};manage.Click+=(_,_)=>OpenPasskeyManagement();
+  var passkeyActions=new FlowLayoutPanel{Width=630,AutoSize=true,WrapContents=true};
+  var add=new Button{Text="Connect another device",Width=200,AutoSize=true,MinimumSize=new Size(200,32)};add.Click+=async (_,_)=>await OpenPasskeySetup();
+  var manage=new Button{Text="Manage devices",Width=145,AutoSize=true,MinimumSize=new Size(145,32)};manage.Click+=(_,_)=>OpenPasskeyManagement();
   passkeyActions.Controls.AddRange([add,manage]);content.Controls.Add(passkeyActions);
   var wizard=new Button{Text="Restart Setup Wizard…",Width=200,Height=35};
   wizard.Click+=(_,_)=>{
@@ -503,6 +542,14 @@ sealed class TrayContext : ApplicationContext {
    form.Close();OpenSetupWizard();
   };
   content.Controls.Add(wizard);
+  var details=new Button{Text="Show diagnostics",AutoSize=true};
+  componentsLabel=new Label{Text=ComponentReport(),AutoSize=true,MaximumSize=new Size(640,0),Font=new Font("Consolas",9),Visible=false};
+  details.Click+=(_,_)=>{componentsLabel.Visible=!componentsLabel.Visible;details.Text=componentsLabel.Visible?"Hide diagnostics":"Show diagnostics";};
+  content.Controls.Add(details);content.Controls.Add(componentsLabel);
+  content.SizeChanged+=(_,_)=>{
+   var width=Math.Max(200,content.ClientSize.Width-content.Padding.Horizontal-SystemInformation.VerticalScrollBarWidth-8);
+   foreach(Control child in content.Controls)if(child is Label label)label.MaximumSize=new Size(width,0);
+  };
   form.Controls.Add(content);
   form.FormClosed+=(_,_)=>{settings=null;statusLabel=null;componentsLabel=null;};
   form.Show();
@@ -627,6 +674,7 @@ sealed class TrayContext : ApplicationContext {
        "stop"=>ApplyStop(),
        "restart"=>ApplyRestart(),
        "settings"=>ApplySettings(),
+       "prepare-update"=>ApplyPrepareUpdate(),
        _=>"ERROR unsupported command"
       };
       tcs.TrySetResult(result);
@@ -639,8 +687,15 @@ sealed class TrayContext : ApplicationContext {
   }
  }
  readonly Control formDispatcher=new Control();
+ string ApplyPrepareUpdate(){
+  monitor.Stop();Stop();
+  var exitTimer=new System.Windows.Forms.Timer{Interval=1500};
+  exitTimer.Tick+=(_,_)=>{exitTimer.Stop();cancel.Cancel();supervisor.Dispose();tray.Visible=false;ExitThread();};
+  exitTimer.Start();return "UPDATE_READY";
+ }
  string ApplyStart(){Start();return Status;}
  string ApplyStop(){Stop();return Status;}
  string ApplyRestart(){Stop();Start();return Status;}
  string ApplySettings(){OpenSettings();return "Settings opened";}
 }
+
