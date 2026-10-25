@@ -45,7 +45,7 @@ test('public tunnel state follows explicit HOMEMCP_HOME, not default platform pa
   assert.equal(dataPath(),path.join(base,'data','oracle-tunnel'));
   savePublic('test-meta',{status:'ok'});
   assert.deepEqual(loadPublic('test-meta'),{status:'ok'});
-  assert.equal(fs.statSync(path.join(dataPath(),'test-meta.json')).mode&0o777,0o600);
+  if(process.platform!=='win32')assert.equal(fs.statSync(path.join(dataPath(),'test-meta.json')).mode&0o777,0o600);
  }finally{
   if(prior===undefined)delete process.env.HOMEMCP_HOME;else process.env.HOMEMCP_HOME=prior;
   fs.rmSync(base,{recursive:true,force:true});

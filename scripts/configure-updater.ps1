@@ -5,6 +5,8 @@ param(
  [switch]$InstallImmediately
 )
 $ErrorActionPreference='Stop'
+$uri=$null
+if($FeedUrl -match '["\r\n]' -or ![Uri]::TryCreate($FeedUrl,[UriKind]::Absolute,[ref]$uri) -or $uri.Scheme -ne 'https' -or $uri.UserInfo){throw 'Use an HTTPS feed URL without embedded credentials or quotes'}
 $root=Join-Path $env:LOCALAPPDATA 'HomeMCP'
 New-Item -ItemType Directory -Force $root | Out-Null
 $configPath=Join-Path $root 'update-source.json'
@@ -21,3 +23,4 @@ $principal=New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLev
 $settings=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -StartWhenAvailable
 Register-ScheduledTask -TaskName 'HomeMCP-Updater' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 Write-Host "HomeMCP updater configured ($mode, daily, when user logged on). No reboot needed."
+

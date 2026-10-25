@@ -27,7 +27,7 @@ if(config.egress?.enabled)throw new Error('Remote egress disabled while security
 const egress=new EgressManager(config.egress,log,dataDir);
 const security=new ApprovalStore(dataDir,{timeoutMs:config.security?.approvalTimeoutMs||600000});
 const configuredOrigin=config.publicUrl||config.security?.rpOrigin||`http://localhost:${port}`;
-const passkeys=new PasskeyManager(dataDir,{rpID:config.security?.rpID||new URL(configuredOrigin).hostname,origin:configuredOrigin});
+const passkeys=new PasskeyManager(config.security?.passkeyDataDir||dataDir,{rpID:config.security?.rpID||new URL(configuredOrigin).hostname,origin:configuredOrigin});
 const policy=config.security?.policy||{};
 // A single per-installation HTTPS origin is used for both passkeys and OAuth.
 // Never infer issuer from request Host / Forwarded headers controlled by callers.

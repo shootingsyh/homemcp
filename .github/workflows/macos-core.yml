@@ -81,4 +81,7 @@ jobs:
           TAG: macos-dev-${{ github.run_id }}
         run: |
           cp build/macos-dist/HomeMCP-signed-app.pkg "HomeMCP-${{ matrix.runner }}-adhoc.pkg"
+          shasum -a 256 "HomeMCP-${{ matrix.runner }}-adhoc.pkg" > "HomeMCP-${{ matrix.runner }}-adhoc.pkg.sha256"
+          gh release upload "$TAG" "HomeMCP-${{ matrix.runner }}-adhoc.pkg.sha256" --clobber
           gh release upload "$TAG" "HomeMCP-${{ matrix.runner }}-adhoc.pkg" --clobber
+
