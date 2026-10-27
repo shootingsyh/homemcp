@@ -39,19 +39,25 @@ try{
   console.log(cli('enroll',username,plan));
  }else if(action==='claim'){
   const e=pending();if(!e?.id)throw Error('enroll_first');
-  const r=await new TunnelClient().getEnrollment(e.id);
-  const credential=validateClaim(r);
-  if(!credential){console.log(JSON.stringify({claimed:false,status:r.status}));}
-  else{saveSecret('credential',credential);console.log(JSON.stringify({claimed:true,origin:domain(credential)}));}
+  const client=new TunnelClient();
+  const credential=await client.claimAndSave(e.id,c=>saveSecret('credential',c),{existing:loadSecret('credential')});
+  if(!credential){console.log(JSON.stringify({claimed:false,status:(await client.getEnrollment(e.id)).status}));}
+  else{console.log(JSON.stringify({claimed:true,origin:domain(credential)}));}
  }else if(action==='activate'){
   let credential=loadSecret('credential');
+  if(credential&&pending()?.id){
+   // Only recover an unconfirmed claim; do not touch already active tokens.
+   const client=new TunnelClient();
+   const status=await client.getEnrollment(pending().id);
+   if(status.status==='claimed'&&!status.claim_acked)
+    credential=await client.claimAndSave(pending().id,c=>saveSecret('credential',c),{existing:credential});
+  }
   if(!credential){
    const enrollment=pending();
    if(!enrollment?.id)throw Error('enroll_first');
-   const result=await new TunnelClient().getEnrollment(enrollment.id);
-   credential=validateClaim(result);
-   if(!credential)throw Error('enrollment_not_ready_'+String(result.status||'unknown'));
-   saveSecret('credential',credential);
+   const client=new TunnelClient();
+   credential=await client.claimAndSave(enrollment.id,c=>saveSecret('credential',c));
+   if(!credential)throw Error('enrollment_not_ready_'+String((await client.getEnrollment(enrollment.id)).status||'unknown'));
   }
   frpBootstrapToken(credential,{override:configuredFrpOverride()});
   const candidates=[process.env.HOMEMCP_FRPC_BIN,path.join(root,'runtime','frpc'),'/opt/homebrew/bin/frpc','/usr/local/bin/frpc'].filter(Boolean);

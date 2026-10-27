@@ -18,8 +18,29 @@ export class TunnelClient {
     return body;
   }
   enroll(username,plan){return this.request('POST','/api/v1/enrollments',{data:{username,plan}})}
-  // IMPORTANT: GET may ROTATE credentials for mock users. Do not poll after a successful claim.
+  // Status reads are safe: only explicit POST may issue credentials.
   getEnrollment(id){return this.request('GET',`/api/v1/enrollments/${encodeURIComponent(id)}`)}
+  claimEnrollment(id){return this.request('POST',`/api/v1/enrollments/${encodeURIComponent(id)}/claim`)}
+  ackEnrollment(id,token){return this.request('POST',`/api/v1/enrollments/${encodeURIComponent(id)}/claim/ack`,{data:{token}})}
+  async claimAndSave(id,save,{existing=null,maxAttempts=8}={}){
+    // Recover a crash between durable persistence and ACK without rotating first.
+    if(existing?.token){
+      try{await this.ackEnrollment(id,existing.token);return existing}
+      catch(e){if(!(e instanceof TunnelAPIError)||!'stale_claim,not_claimed'.split(',').includes(e.code))throw e}
+    }
+    const status=await this.getEnrollment(id);
+    if(status.status==='pending_payment')return null;
+    if(status.status==='claimed'&&status.claim_acked)throw new Error('claim_already_acked_credentials_unavailable');
+    for(let i=0;i<maxAttempts;i++){
+      const response=await this.claimEnrollment(id);
+      const c=validateClaim(response);
+      if(!c)throw new Error('invalid_claim_response');
+      await save(c); // MUST durably persist before ACK; failures leave claim recoverable.
+      try{await this.ackEnrollment(id,c.token);return c}
+      catch(e){if(e instanceof TunnelAPIError&&e.code==='stale_claim')continue;throw e}
+    }
+    throw new Error('claim_stale_retry_exhausted');
+  }
   account(){return this.request('GET','/api/v1/account')}
   portal(){return this.request('POST','/api/v1/account/portal')}
   deleteMockAccount(){return this.request('DELETE','/api/v1/account')}

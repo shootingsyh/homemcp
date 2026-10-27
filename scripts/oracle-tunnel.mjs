@@ -12,9 +12,9 @@ async function main(){
  }
  case 'claim':{
   if(!state.id)throw Error('enroll_first');
-  const r=await client.getEnrollment(state.id);const c=validateClaim(r);
-  if(!c){console.log('CLAIM_STATUS',r.status);break}
-  saveSecret('credential',c);console.log('CREDENTIAL_SAVED_PROTECTED',c.subdomain);break;
+  const c=await client.claimAndSave(state.id,c=>saveSecret('credential',c),{existing:loadSecret('credential')});
+  if(!c){console.log('CLAIM_STATUS', (await client.getEnrollment(state.id)).status);break}
+  console.log('CREDENTIAL_SAVED_PROTECTED',c.subdomain);break;
  }
  case 'account':{
   if(!existing)throw Error('claim_first');const a=await client.account();console.log(JSON.stringify(a));break;

@@ -25,3 +25,41 @@ test('mock-account deletion requires bearer and uses DELETE',async()=>{
  const calls=[];const c=new TunnelClient({token:'mock-token',fetchImpl:async(u,o)=>{calls.push(o);return {ok:true,json:async()=>({status:'deleted'})}}});
  await c.deleteMockAccount();assert.equal(calls[0].method,'DELETE');assert.equal(calls[0].headers.Authorization,'Bearer mock-token');
 });
+
+test('status polling is read-only; claim persists before ack',async()=>{
+ const calls=[];const token='T'.repeat(43);let saved=false;
+ const c=new TunnelClient({fetchImpl:async(u,o)=>{
+  calls.push([o.method,new URL(u).pathname,o.body&&JSON.parse(o.body)]);
+  const path=new URL(u).pathname;
+  if(path.endsWith('/claim/ack')){assert(saved);assert.equal(JSON.parse(o.body).token,token)}
+  const body=path.endsWith('/claim')?{status:'claimed',credentials:{subdomain:'alice.tunnel.homemcp.si',token,frpc_config:'BOOTSTRAP_TOKEN_EMBEDDED_IN_HOMEMCP_APP'}}:{status:'ready'};
+  return {ok:true,status:200,json:async()=>body};
+ }});
+ await c.getEnrollment('abc');
+ await c.claimAndSave('abc',async()=>{saved=true});
+ assert.deepEqual(calls.map(x=>x[0]),['GET','GET','POST','POST']);
+ assert.equal(calls[3][1],'/api/v1/enrollments/abc/claim/ack');
+});
+test('save error leaves claim unacked and safely retryable',async()=>{
+ let ackCount=0,claims=0;
+ const c=new TunnelClient({fetchImpl:async(u,o)=>{
+  const path=new URL(u).pathname;
+  if(path.endsWith('/claim'))claims++;
+  if(path.endsWith('/claim/ack'))ackCount++;
+  return {ok:true,status:200,json:async()=>path.endsWith('/claim')?{status:'claimed',credentials:{subdomain:'alice.tunnel.homemcp.si',token:'T'.repeat(42)+claims,frpc_config:'BOOTSTRAP_TOKEN_EMBEDDED_IN_HOMEMCP_APP'}}:{status:'ready'}};
+ }});
+ await assert.rejects(c.claimAndSave('abc',()=>{throw Error('disk_full')}),/disk_full/);
+ assert.equal(ackCount,0);
+ await c.claimAndSave('abc',()=>{});
+ assert.equal(claims,2);assert.equal(ackCount,1);
+});
+test('stale ack reclaims, resaves and acknowledges fresh token',async()=>{
+ let claims=0,saves=0;
+ const c=new TunnelClient({fetchImpl:async(u,o)=>{
+  const path=new URL(u).pathname;
+  if(path.endsWith('/claim'))claims++;
+  if(path.endsWith('/claim/ack')&&claims===1)return {ok:false,status:409,json:async()=>({error:{code:'stale_claim'}})};
+  return {ok:true,status:200,json:async()=>path.endsWith('/claim')?{status:'claimed',credentials:{subdomain:'alice.tunnel.homemcp.si',token:'T'.repeat(42)+claims,frpc_config:'BOOTSTRAP_TOKEN_EMBEDDED_IN_HOMEMCP_APP'}}:{status:'ready'}};
+ }});
+ await c.claimAndSave('abc',()=>{saves++});assert.equal(claims,2);assert.equal(saves,2);
+});
