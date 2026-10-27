@@ -7,10 +7,40 @@ import (
 	"time"
 )
 
-// Test accounts (mock allowlist) are reusable: re-polling a claimed
+// Test accounts (mock allowlist) are reusable: re-claiming a claimed
 // enrollment rotates the token and returns fresh credentials. Real
-// accounts keep claim-exactly-once; their recovery path is the
-// operator reset endpoint. Both halves are pinned down here.
+// accounts are claim-once once the client confirms (acks) the claim;
+// their recovery path is the operator reset endpoint. Both halves are
+// pinned down here.
+
+// claimViaAPI performs POST .../claim and returns the issued token.
+func claimViaAPI(t *testing.T, ts *httptest.Server, enrollmentID string) string {
+	t.Helper()
+	status, body := doJSON(t, http.MethodPost, ts.URL+"/api/v1/enrollments/"+enrollmentID+"/claim", nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("claim %s: status = %d; body %v", enrollmentID, status, body)
+	}
+	creds, ok := body["credentials"].(map[string]any)
+	if !ok {
+		t.Fatalf("claim %s: no credentials in response %v", enrollmentID, body)
+	}
+	token, _ := creds["token"].(string)
+	if token == "" {
+		t.Fatalf("claim %s: empty token", enrollmentID)
+	}
+	return token
+}
+
+// ackViaAPI performs POST .../claim/ack with the given token and
+// requires success.
+func ackViaAPI(t *testing.T, ts *httptest.Server, enrollmentID, token string) {
+	t.Helper()
+	status, body := doJSON(t, http.MethodPost, ts.URL+"/api/v1/enrollments/"+enrollmentID+"/claim/ack",
+		map[string]string{"token": token}, nil)
+	if status != http.StatusOK || body["claim_acked"] != true {
+		t.Fatalf("ack %s: status = %d; body %v", enrollmentID, status, body)
+	}
+}
 
 func enrollAndClaim(t *testing.T, ts *httptest.Server, username string) (enrollmentID, token string) {
 	t.Helper()
@@ -20,18 +50,8 @@ func enrollAndClaim(t *testing.T, ts *httptest.Server, username string) (enrollm
 		t.Fatalf("enroll %s: status = %d; body %v", username, status, body)
 	}
 	enrollmentID, _ = body["enrollment_id"].(string)
-	status, body = doJSON(t, http.MethodGet, ts.URL+"/api/v1/enrollments/"+enrollmentID, nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("claim %s: status = %d; body %v", username, status, body)
-	}
-	creds, ok := body["credentials"].(map[string]any)
-	if !ok {
-		t.Fatalf("claim %s: no credentials in response %v", username, body)
-	}
-	token, _ = creds["token"].(string)
-	if token == "" {
-		t.Fatalf("claim %s: empty token", username)
-	}
+	token = claimViaAPI(t, ts, enrollmentID)
+	ackViaAPI(t, ts, enrollmentID, token)
 	return enrollmentID, token
 }
 
@@ -49,19 +69,21 @@ func TestMockEnrollmentReclaimRotates(t *testing.T) {
 
 	eid, tokenA := enrollAndClaim(t, ts, "devreuse")
 
-	// Re-poll the claimed enrollment: a mock account gets FRESH
-	// credentials (rotated), not an empty view.
+	// Reads never carry credentials any more — not even for mocks.
 	status, body := doJSON(t, http.MethodGet, ts.URL+"/api/v1/enrollments/"+eid, nil, nil)
 	if status != http.StatusOK {
-		t.Fatalf("re-claim: status = %d", status)
+		t.Fatalf("poll claimed: status = %d", status)
 	}
-	creds, ok := body["credentials"].(map[string]any)
-	if !ok {
-		t.Fatalf("re-claim returned no credentials: %v", body)
+	if _, has := body["credentials"]; has {
+		t.Fatalf("status read leaked credentials: %v", body)
 	}
-	tokenB, _ := creds["token"].(string)
-	if tokenB == "" || tokenB == tokenA {
-		t.Fatalf("re-claim token = %q, want a fresh rotated token", tokenB)
+
+	// But a mock account can always CLAIM again: fresh credentials
+	// (rotated), even though the previous claim was acked.
+	tokenB := claimViaAPI(t, ts, eid)
+	ackViaAPI(t, ts, eid, tokenB)
+	if tokenB == tokenA {
+		t.Fatal("re-claim did not rotate the token")
 	}
 
 	// The old token is dead everywhere; the new one works.
@@ -77,10 +99,7 @@ func TestMockEnrollmentReclaimRotates(t *testing.T) {
 	}
 
 	// And it can be re-claimed yet again (dev loops are unbounded).
-	_, tokenC := func() (string, string) {
-		_, b := doJSON(t, http.MethodGet, ts.URL+"/api/v1/enrollments/"+eid, nil, nil)
-		return "", b["credentials"].(map[string]any)["token"].(string)
-	}()
+	tokenC := claimViaAPI(t, ts, eid)
 	if tokenC == tokenB {
 		t.Fatal("second re-claim did not rotate")
 	}
@@ -111,13 +130,23 @@ func TestRealEnrollmentStaysClaimOnce(t *testing.T) {
 	if _, _, err := s.store.ClaimAndIssue("enr_real_1", hashToken("real-token-1")); err != nil {
 		t.Fatalf("ClaimAndIssue: %v", err)
 	}
+	// The client persisted the credentials and confirmed the claim:
+	// the terminal state this test pins down.
+	if _, err := s.store.AckClaim("enr_real_1", hashToken("real-token-1")); err != nil {
+		t.Fatalf("AckClaim: %v", err)
+	}
 
 	status, body := doJSON(t, http.MethodGet, ts.URL+"/api/v1/enrollments/enr_real_1", nil, nil)
 	if status != http.StatusOK {
 		t.Fatalf("poll claimed enrollment: status = %d", status)
 	}
 	if _, has := body["credentials"]; has {
-		t.Fatalf("real account re-claim leaked credentials: %v", body)
+		t.Fatalf("real account status read leaked credentials: %v", body)
+	}
+	// A further claim is refused outright once the claim is acked.
+	status, body = doJSON(t, http.MethodPost, ts.URL+"/api/v1/enrollments/enr_real_1/claim", nil, nil)
+	if status != http.StatusConflict || body["error"].(map[string]any)["code"] != "already_claimed" {
+		t.Fatalf("real account re-claim: status = %d body %v, want 409 already_claimed", status, body)
 	}
 	// The original token is untouched: it still passes the plugin.
 	if resp := s.pluginLogin(loginContentJSON("realuser", "real-token-1")); resp.Reject {

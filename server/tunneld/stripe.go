@@ -124,9 +124,14 @@ func (s *Server) createCheckoutSession(e Enrollment) (sessionID, checkoutURL str
 	form.Set("metadata[enrollment_id]", e.ID)
 	form.Set("line_items[0][price]", cfg.PriceFor(e.Plan))
 	form.Set("line_items[0][quantity]", "1")
-	landing := cfg.APIPublicBase + "/api/v1/enrollments/" + e.ID
-	form.Set("success_url", landing+"?checkout=success")
-	form.Set("cancel_url", landing+"?checkout=cancelled")
+	// The browser returns to tunneld's static checkout-complete page,
+	// which only reports status. It must NEVER point at the enrollment
+	// API: a browser (or a refresh, or a link scanner) must not be
+	// able to trigger or consume credential issuance — claiming is an
+	// explicit POST by the client app (see api.go).
+	landing := cfg.APIPublicBase + "/checkout/complete?enrollment=" + e.ID
+	form.Set("success_url", landing+"&checkout=success")
+	form.Set("cancel_url", landing+"&checkout=cancelled")
 	switch e.Plan {
 	case PlanAnnual:
 		form.Set("subscription_data[trial_period_days]", "7")

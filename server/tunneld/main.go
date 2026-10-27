@@ -98,9 +98,13 @@ func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	// frps server plugin (loopback only; never publish this port).
 	mux.HandleFunc("POST /plugin/frp", s.handleFRPPlugin)
-	// Public client API (no web pages anywhere).
+	// Public client API (plus the one static checkout-return page).
 	mux.HandleFunc("POST /api/v1/enrollments", s.handleCreateEnrollment)
 	mux.HandleFunc("GET /api/v1/enrollments/{id}", s.handleGetEnrollment)
+	mux.HandleFunc("POST /api/v1/enrollments/{id}/claim", s.handleClaimEnrollment)
+	mux.HandleFunc("POST /api/v1/enrollments/{id}/claim/ack", s.handleClaimAck)
+	// Static Stripe return page (status only; never issues credentials).
+	mux.HandleFunc("GET /checkout/complete", s.handleCheckoutComplete)
 	mux.HandleFunc("GET /api/v1/account", s.handleGetAccount)
 	mux.HandleFunc("DELETE /api/v1/account", s.handleDeleteAccount)
 	mux.HandleFunc("POST /api/v1/account/portal", s.handlePortal)

@@ -18,11 +18,15 @@ All request/response bodies are JSON. All timestamps are RFC 3339 UTC.
   the account's credentials after payment. Keep it in client-local
   storage only; never log it, never put it in analytics/crash reports.
 - **Per-user token** — the tenant credential (43-char base64url).
-  Shown **exactly once**, at claim time. The server stores only its
-  SHA-256 hash; it cannot be re-displayed. The client must persist it
-  in its OS credential store and treat "lost token" as a
-  contact-support flow. (Mock test accounts are the exception —
-  see Mock Pay: they can re-claim and self-delete.)
+  Issued only by the claim POST (step 2); the server stores only its
+  SHA-256 hash and can never re-display the same token. The claim is
+  **recoverable until the client confirms (acks) that it persisted
+  the credentials**: claiming again before the ack rotates the token
+  and returns fresh credentials, so a crash or a failed save is fixed
+  by simply claiming again. After the ack the token is final — the
+  client must persist it in its OS credential store and treat "lost
+  token" as a contact-support flow. (Mock test accounts are the
+  exception — see Mock Pay: they can re-claim and self-delete.)
 - **Bootstrap token** — a shared frps token embedded in the HomeMCP
   app itself. Not user-specific, not a credential. The client fills it
   into the frpc config's `auth.token` (the claimed config contains the
@@ -77,25 +81,34 @@ Errors: `422 invalid_username`, `422 username_reserved`,
 
 ### 2. Wait for activation, then claim credentials
 
-Poll (suggested: every 3s for the first minute after returning from
-Checkout, then every 15s; stop on `claimed` or after ~10 minutes and
-resume on app focus):
+**Poll the status** (suggested: every 3s for the first minute after
+returning from Checkout, then every 15s; stop on `claimed` or after
+~10 minutes and resume on app focus):
 
 ```
 GET /api/v1/enrollments/{enrollment_id}
 ```
 
-Responses by state:
+This GET is a **pure read**: it never issues, rotates or consumes
+credentials, so polling/refreshing it any number of times is safe.
+Response fields: `{ status, credentials_issued, claim_acked,
+sub_status, … }` — never a `credentials` object.
 
-- `pending_payment` — `{ status: "pending_payment", credentials_issued: false, … }`.
-  The webhook has not landed yet (usually seconds). Keep polling.
-- First response after payment — the server generates the token,
-  stores only its hash, and returns it **once**:
+- `pending_payment` — the webhook has not landed yet (usually
+  seconds). Keep polling.
+- `ready` — payment confirmed. Claim now.
+- `claimed` — credentials were issued; `claim_acked` says whether
+  the claim was confirmed (below).
 
-```json
+**Claim** — an explicit POST, and the *only* issuance path:
+
+```
+POST /api/v1/enrollments/{enrollment_id}/claim
+→ 200
 {
   "status": "claimed",
   "credentials_issued": true,
+  "claim_acked": false,
   "sub_status": "trialing",
   "credentials": {
     "username": "alice",
@@ -106,14 +119,46 @@ Responses by state:
 }
 ```
 
-- Every later response — same shape **without** `credentials`. There
-  is no way to fetch the token again.
+**Persist, then confirm.** Write the credentials to the OS
+credential store / config *first*; only then:
 
-Errors: `404 enrollment_not_found`.
+```
+POST /api/v1/enrollments/{enrollment_id}/claim/ack
+{ "token": "…the token from the claim response…" }
+→ 200 { "status": "claimed", "claim_acked": true, … }
+```
 
-Note: Stripe's success redirect lands the *browser* on this same GET
-URL (it just renders JSON). The client must not depend on the redirect;
-polling is the mechanism.
+Recovery semantics (the point of the ack):
+
+- **Any failure before the ack** — app crash, network loss, save
+  failure, lost response — just **claim again**. A claim on an
+  un-acked enrollment **rotates** the token: the un-saved token dies
+  and the response carries fresh credentials; persist those and ack
+  with the new token. Concurrent claims converge the same way:
+  exactly one token is live at any moment, so ack the newest one
+  you saved.
+- `409 stale_claim` (on ack) — a newer claim superseded the token
+  you presented. Claim again, persist the newest credentials, ack
+  again.
+- **After a successful ack the claim is final.** Further claims get
+  `409 already_claimed`; a lost token is a contact-support flow
+  (operator reset). Acking again with the same token is idempotent
+  (`200`).
+
+Claim errors: `404 enrollment_not_found`,
+`409 credentials_not_ready` (still `pending_payment` — keep
+polling), `409 already_claimed`. Ack errors:
+`404 enrollment_not_found`, `409 not_claimed` (claim first),
+`409 stale_claim`, `400 bad_request` (missing token).
+
+Note: Stripe's success/cancel redirects land the *browser* on a
+static status page (`/checkout/complete`) that only tells the user
+to return to the app — it carries no data and triggers nothing.
+The client must not depend on the redirect; polling + claim is the
+mechanism. (Contract history: issuance previously happened on the
+status GET itself, which the Stripe redirect also hit — a browser
+return could burn the one-time claim before the client saved it.
+That behaviour is removed; clients must use the claim POST.)
 
 ### 3. Run the tunnel
 
@@ -257,13 +302,14 @@ account view); monthly → `active` immediately. Mock accounts report
 
 ### Test-account reuse and cleanup (mock accounts only)
 
-Mock accounts exist to be reused, so they are exempt from
-claim-exactly-once:
+Mock accounts exist to be reused, so they are exempt from the
+claim-is-final-after-ack rule:
 
-- **Re-claim:** polling an already-claimed enrollment again returns
-  **fresh credentials with a rotated token** (the previous token
-  stops working immediately). Client development can wipe local
-  state and re-claim the same test username at will.
+- **Re-claim:** claiming an already-claimed enrollment again (POST
+  claim, as usual) returns **fresh credentials with a rotated
+  token** (the previous token stops working immediately) — mock
+  accounts may do this even after the ack. Client development can
+  wipe local state and re-claim the same test username at will.
 - **Self-delete:** `DELETE /api/v1/account` with the account's own
   Bearer token deletes the mock account completely — user,
   enrollments, DNS challenges (including provider-side TXT cleanup)
@@ -352,6 +398,8 @@ Clients must key behaviour off `code`, not `message`.
 
 Stable codes: `bad_request`, `invalid_username`, `username_reserved`,
 `username_taken`, `invalid_plan`, `enrollment_not_found`,
+`credentials_not_ready`, `already_claimed`, `not_claimed`,
+`stale_claim`,
 `unauthorized`, `no_billing_account`, `stripe_not_configured`,
 `stripe_error`, `admin_disabled`, `invalid_signature` (webhooks),
 `user_not_found`, `invalid_event` (mock-pay test hook),
