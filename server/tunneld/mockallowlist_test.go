@@ -139,16 +139,10 @@ func TestMockAllowlistEnrollmentAnnual(t *testing.T) {
 		t.Errorf("mock user unexpectedly has Stripe IDs: %+v", u)
 	}
 
-	// Claim works on the first poll and the plugin lets the user in.
-	status, resp = doJSON(t, "GET", ts.URL+"/api/v1/enrollments/"+enrollmentID, nil, nil)
-	if status != 200 || resp["status"] != EnrollmentClaimed {
-		t.Fatalf("claim: %d %v", status, resp)
-	}
-	creds, _ := resp["credentials"].(map[string]any)
-	token, _ := creds["token"].(string)
-	if token == "" {
-		t.Fatalf("claim issued no token: %v", resp)
-	}
+	// Claim works (explicit POST + ack) and the plugin lets the
+	// user in.
+	token := claimViaAPI(t, ts, enrollmentID)
+	ackViaAPI(t, ts, enrollmentID, token)
 	if loginResp := s.pluginLogin(loginContentJSON("yiliu", token)); loginResp.Reject {
 		t.Errorf("plugin login rejected for allowlisted user: %q", loginResp.RejectReason)
 	}

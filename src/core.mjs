@@ -89,7 +89,7 @@ export class Worker {
   this.pending=(async()=>{
    this.status='starting';
    try{
-    const client=new StdioMcpClient(this.spec);
+    const client=new StdioMcpClient(this.spec,{maxLineBytes:this.spec.maxLineBytes||4*1024*1024});
     await client.connect();this.client=client;this.child=client.child;this.owned=true;
     const tools=await client.list();this.tools=tools;this.status='ready';this.failures=0;
     client.on('unavailable',()=>{this.status='stopped';this.owned=false;this.client=null;this.child=null});

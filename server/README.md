@@ -29,7 +29,7 @@ though it routes it:
   Plugin payloads contain usernames, proxy names, domain names and
   limits — never traffic. tunneld is not in the data path at all.
 - **Credentials are hashed.** Per-user tunnel tokens exist in plaintext
-  only in the one-time claim response and on the user's machine; the
+  only in claim responses and on the user's machine; the
   server stores SHA-256 hashes. Stripe card data never reaches this
   host (hosted Checkout + Billing Portal).
 - **What the relay unavoidably sees:** SNI hostnames, connection
@@ -186,8 +186,10 @@ What the client dev gets:
   origin, exactly like production, where the checkout URL is on
   Stripe's origin instead.
 - **Production-shaped API.** `POST /api/v1/enrollments`,
-  `GET /api/v1/enrollments/<id>` (poll → claim, credentials issued
-  exactly once), `GET /api/v1/account`, and `POST
+  `GET /api/v1/enrollments/<id>` (status polling only — reads never
+  issue credentials), `POST /api/v1/enrollments/<id>/claim` +
+  `…/claim/ack` (the recoverable claim protocol), `GET
+  /api/v1/account`, and `POST
   /api/v1/account/portal` are the same endpoints with the same
   payloads as production (see `docs/CLIENT_CONTRACT.md`). On a mock
   instance the portal call answers `503 stripe_not_configured` —
@@ -216,12 +218,19 @@ curl -s -X POST "$BASE/api/v1/enrollments" \
 #    Pay (mock) — or POST it directly (no body needed):
 curl -s -X POST "<checkout_url from step 1>" >/dev/null
 
-# 3. Poll the enrollment. While unpaid it reports
-#    "pending_payment"; the first poll after payment is the claim —
-#    status flips to "claimed" and that response carries
-#    credentials{username, token, subdomain, frpc_config}, shown
-#    exactly once:
+# 3. Poll the enrollment until it reports "ready" (reads are pure
+#    status; they never issue credentials), then CLAIM with an
+#    explicit POST — the response carries
+#    credentials{username, token, subdomain, frpc_config}:
 curl -s "$BASE/api/v1/enrollments/<enrollment_id>"
+curl -s -X POST "$BASE/api/v1/enrollments/<enrollment_id>/claim"
+
+# 3b. Persist the credentials, THEN confirm the claim by acking
+#     with the token. Until the ack, claiming again rotates the
+#     token and re-issues (crash/save-failure recovery); after the
+#     ack the claim is final:
+curl -s -X POST "$BASE/api/v1/enrollments/<enrollment_id>/claim/ack" \
+  -H 'Content-Type: application/json' -d '{"token":"<token from step 3>"}'
 
 # 4. Account state with the claimed token:
 curl -s "$BASE/api/v1/account" -H "Authorization: Bearer <token from step 3>"
@@ -317,8 +326,9 @@ tunneld is a single Go binary; each runs under its own systemd unit
   only in the creating client's session. Lost per-user tokens cannot
   be re-displayed (hash-only storage) — recovery is rotation via the
   operator endpoint `POST /api/v1/admin/users/{username}/reset-credentials`.
-  Mock (test) accounts are deliberately reusable instead: re-polling a
-  claimed enrollment rotates and re-issues credentials, and a mock
+  Mock (test) accounts are deliberately reusable instead: re-claiming
+  (POST claim) a claimed enrollment rotates and re-issues credentials
+  even after the ack, and a mock
   account can delete itself with `DELETE /api/v1/account` (or be
   deleted by the operator) for a clean-slate re-enrollment.
 - HomeMCP's own Bearer Token (MCP-layer auth) is a separate secret
@@ -349,8 +359,9 @@ tunneld is a single Go binary; each runs under its own systemd unit
   domain in `customDomains` → NewProxy rejected; `type = "tcp"` →
   rejected.
 - Stripe test mode: annual checkout asks for a card before the trial;
-  webhook flips the user to `trialing`; claim returns credentials
-  exactly once; monthly checkout charges immediately.
+  webhook flips the user to `trialing`; the claim POST returns the
+  credentials (a repeat claim before the ack rotates them; after the
+  ack it is refused); monthly checkout charges immediately.
 - Kill the subscription in Stripe test mode → after the next
   login/proxy registration, the tunnel refuses to connect.
 - Nothing but 443/7000 is reachable from the internet

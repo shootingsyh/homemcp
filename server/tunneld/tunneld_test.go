@@ -456,6 +456,14 @@ func TestEnrollmentFlowAnnualTrialAndClaim(t *testing.T) {
 	if form.Get("client_reference_id") != enrollmentID {
 		t.Errorf("client_reference_id = %q, want %q", form.Get("client_reference_id"), enrollmentID)
 	}
+	// The browser return must land on the static status page, never on
+	// the enrollment API (a browser hit must not trigger issuance).
+	if su := form.Get("success_url"); !strings.Contains(su, "/checkout/complete?enrollment="+enrollmentID) || strings.Contains(su, "/api/v1/enrollments/") {
+		t.Errorf("success_url = %q, want the /checkout/complete page for this enrollment", su)
+	}
+	if cu := form.Get("cancel_url"); !strings.Contains(cu, "/checkout/complete?enrollment="+enrollmentID) {
+		t.Errorf("cancel_url = %q, want the /checkout/complete page for this enrollment", cu)
+	}
 	if form.Get("line_items[0][price]") != "price_annual" {
 		t.Errorf("price = %q, want price_annual", form.Get("line_items[0][price]"))
 	}
@@ -507,8 +515,24 @@ func TestEnrollmentFlowAnnualTrialAndClaim(t *testing.T) {
 		t.Errorf("user after webhook: %+v", u)
 	}
 
-	// 4) Claim: first GET returns credentials exactly once.
+	// 4) Reads are pure status now: after the webhook the enrollment
+	// is ready, and neither polling it nor visiting the browser
+	// return page issues anything.
 	status, resp = doJSON(t, "GET", ts.URL+"/api/v1/enrollments/"+enrollmentID, nil, nil)
+	if status != 200 || resp["status"] != EnrollmentReady || resp["credentials"] != nil || resp["credentials_issued"] != false {
+		t.Fatalf("post-webhook enrollment view wrong: %d %v", status, resp)
+	}
+	code, page := doRaw(t, "GET", ts.URL+"/checkout/complete?enrollment="+enrollmentID+"&checkout=success", nil)
+	if code != 200 || !strings.Contains(page, "Payment received") {
+		t.Fatalf("checkout return page: HTTP %d body %q", code, page)
+	}
+	status, resp = doJSON(t, "GET", ts.URL+"/api/v1/enrollments/"+enrollmentID, nil, nil)
+	if status != 200 || resp["status"] != EnrollmentReady || resp["credentials_issued"] != false {
+		t.Fatalf("browser return consumed the claim: %d %v", status, resp)
+	}
+
+	// Claim: an explicit POST issues the credentials.
+	status, resp = doJSON(t, "POST", ts.URL+"/api/v1/enrollments/"+enrollmentID+"/claim", nil, nil)
 	if status != 200 || resp["status"] != EnrollmentClaimed {
 		t.Fatalf("claim: %d %v", status, resp)
 	}
@@ -525,10 +549,22 @@ func TestEnrollmentFlowAnnualTrialAndClaim(t *testing.T) {
 		t.Errorf("frpc_config incomplete:\n%s", frpc)
 	}
 
-	// Second GET: status only, token never re-issued.
+	// GET after the claim: status only, token never re-issued.
 	status, resp = doJSON(t, "GET", ts.URL+"/api/v1/enrollments/"+enrollmentID, nil, nil)
 	if status != 200 || resp["credentials"] != nil {
-		t.Fatalf("second claim leaked credentials: %d %v", status, resp)
+		t.Fatalf("status read leaked credentials: %d %v", status, resp)
+	}
+
+	// The client confirms it persisted the credentials; after the
+	// ack the claim is final — a further claim is refused.
+	status, resp = doJSON(t, "POST", ts.URL+"/api/v1/enrollments/"+enrollmentID+"/claim/ack",
+		map[string]string{"token": token}, nil)
+	if status != 200 || resp["claim_acked"] != true {
+		t.Fatalf("claim ack: %d %v", status, resp)
+	}
+	status, resp = doJSON(t, "POST", ts.URL+"/api/v1/enrollments/"+enrollmentID+"/claim", nil, nil)
+	if status != http.StatusConflict || resp["error"].(map[string]any)["code"] != "already_claimed" {
+		t.Fatalf("claim after ack: %d %v, want 409 already_claimed", status, resp)
 	}
 
 	// 5) Account endpoint with the issued token; plugin accepts login.

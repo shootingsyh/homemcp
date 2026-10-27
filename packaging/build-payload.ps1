@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'copy-dependencies.ps1')
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $payload = Join-Path $root 'build\payload'
 New-Item -ItemType Directory -Force "$payload\runtime", "$payload\workers\playwright", "$payload\scripts", "$payload\src", "$payload\web", "$payload\test", "$root\dist" | Out-Null
@@ -7,7 +8,7 @@ Copy-Item "$root\web\*" "$payload\web" -Recurse -Force
 Copy-Item "$root\test\*" "$payload\test" -Recurse -Force
 Copy-Item "$root\scripts\*" "$payload\scripts" -Recurse -Force
 Copy-Item "$root\package.json" "$payload\package.json"
-Copy-Item "$root\node_modules" "$payload\node_modules" -Recurse -Force
+Copy-HomeMCPDependencies "$root\node_modules" "$payload\node_modules"
 $nodeUrl = 'https://nodejs.org/dist/v22.16.0/node-v22.16.0-win-x64.zip'
 Invoke-WebRequest $nodeUrl -OutFile "$root\build\node.zip"
 Expand-Archive "$root\build\node.zip" -DestinationPath "$root\build\node-dist" -Force
@@ -19,7 +20,7 @@ try {
   npm.cmd init -y | Out-Null
   npm.cmd install --no-audit --no-fund --ignore-scripts $pwPkg
   if ($LASTEXITCODE -ne 0) { throw 'Playwright dependency install failed' }
-  Copy-Item 'node_modules' "$payload\workers\playwright\node_modules" -Recurse -Force
+  Copy-HomeMCPDependencies (Join-Path (Get-Location) 'node_modules') "$payload\workers\playwright\node_modules"
 } finally { Pop-Location }
 @'
 import { createRequire } from 'node:module';
@@ -55,6 +56,20 @@ foreach ($name in @('pywintypes314.dll','pythoncom314.dll')) {
   Copy-Item $src (Join-Path $worker $name) -Force
 }
 
+# Exclude the desktop worker's own noninteractive overlay HWNDs before UIA.
+& (Join-Path $worker 'python.exe') (Join-Path $root 'scripts\patch-windows-snapshot.py') (Join-Path $worker 'site-packages')
+if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP snapshot overlay patch failed' }
+
+& (Join-Path $worker 'python.exe') (Join-Path $root 'scripts\patch-windows-indicator.py') (Join-Path $worker 'site-packages')
+if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP indicator progress patch failed' }
+& (Join-Path $worker 'python.exe') (Join-Path $root 'test\test_windows_indicator_bitmap.py')
+if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP indicator/GDI regression failed' }
+
+& (Join-Path $worker 'python.exe') (Join-Path $root 'scripts\patch-windows-powershell.py') (Join-Path $worker 'site-packages')
+if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP background command capture patch failed' }
+& (Join-Path $worker 'python.exe') (Join-Path $root 'test\test_windows_powershell_capture.py')
+if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP background command regression failed' }
+
 & (Join-Path $worker 'python.exe') -c "import windows_mcp; print('BUNDLED_WINDOWS_MCP_OK')"
 if ($LASTEXITCODE -ne 0) { throw 'Embedded Python smoke test failed' }
 dotnet publish "$root\native\Manager\Manager.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$root\build\manager"
@@ -62,3 +77,4 @@ if ($LASTEXITCODE -ne 0) { throw 'Manager publish failed' }
 Copy-Item "$root\build\manager\HomeMCP.Manager.exe" "$payload\runtime\HomeMCP.Manager.exe" -Force
 & "$root\packaging\generate-wix.ps1" -Payload $payload -Output "$root\build\HomeMCP.generated.wxs"
 if ($LASTEXITCODE -ne 0) { throw 'WiX manifest generation failed' }
+

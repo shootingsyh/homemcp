@@ -6,11 +6,11 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import readline from 'node:readline';
 
-test('mac desktop adapter discovers tools and returns screenshot as MCP image',async()=>{
+test('mac desktop adapter discovers tools and returns screenshot as MCP image',{skip:process.platform==='win32'?'POSIX executable mock requires Unix':false},async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'homemcp-mac-desktop-'));
  const mock=path.join(dir,'mock-helper');
  fs.writeFileSync(mock,'#!/usr/bin/env node\nlet s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{const req=JSON.parse(s);console.log(JSON.stringify(req.tool==="desktop_screenshot"?{image_base64:"aGVsbG8=",width:1,height:1}:{ok:true,tool:req.tool}))})\n',{mode:0o755});
- const child=spawn(process.execPath,['scripts/macos/desktop-worker.mjs'],{env:{...process.env,HOMEMCP_MAC_DESKTOP_HELPER:mock},stdio:['pipe','pipe','pipe']});
+ const child=spawn(process.execPath,['scripts/macos/desktop-worker.mjs'],{env:{...process.env,HOMEMCP_MAC_DESKTOP_HELPER:mock,HOMEMCP_MAC_DESKTOP_LEGACY:'1'},stdio:['pipe','pipe','pipe']});
  const it=readline.createInterface({input:child.stdout})[Symbol.asyncIterator]();
  const send=(id,method,params)=>child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,...(params?{params}:{})})+'\n');
  try{

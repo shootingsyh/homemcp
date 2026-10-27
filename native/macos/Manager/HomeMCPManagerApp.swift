@@ -1,11 +1,46 @@
 import SwiftUI
 import Foundation
 import AppKit
+import ServiceManagement
+import CoreGraphics
+import ApplicationServices
 
 @main
 struct HomeMCPManagerApp: App {
+    init() {
+        if ProcessInfo.processInfo.environment["HOMEMCP_UI_SMOKE"] == "1" { return }
+        // Desktop IPC lives in the primary app so macOS TCC attributes access
+        // to the same bundle the user authorizes in System Settings.
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/HomeMCP", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        DispatchQueue.global(qos: .userInitiated).async {
+            serve(socketPath: directory.appendingPathComponent("desktop-manager.sock").path)
+        }
+    }
     var body: some Scene {
-        WindowGroup("HomeMCP") { SetupView().frame(minWidth: 580, minHeight: 440) }
+        WindowGroup("HomeMCP", id: "manager") {
+            SetupView().frame(minWidth: 580, minHeight: 440)
+        }
+        WindowGroup("HomeMCP Updates", id: "updates") { UpdateView() }
+        MenuBarExtra("HomeMCP", systemImage: "display") {
+            ManagerMenu()
+        }
+    }
+}
+
+struct ManagerMenu: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Open HomeMCP Manager") { openWindow(id: "manager") }
+        Button("Update HomeMCP…") { openWindow(id: "updates") }
+        Divider()
+        Button("Request Screen Recording") { _ = CGRequestScreenCaptureAccess() }
+        Button("Open Screen Recording Settings") {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+        }
+        Divider()
+        Button("Quit HomeMCP") { NSApplication.shared.terminate(nil) }
     }
 }
 
@@ -14,6 +49,17 @@ struct WizardCheck: Decodable {
     let passkeyCount: Int
     let complete: Bool
     let connectionMode: String
+}
+
+struct DesktopSelfTestReport: Decodable {
+    struct Check: Decodable {
+        let name: String
+        let state: String
+        let detail: String
+        let nextStep: String?
+    }
+    let ready: Bool
+    let checks: [Check]
 }
 
 struct SetupView: View {
@@ -26,6 +72,17 @@ struct SetupView: View {
     @State private var feedback = "Welcome. Your existing device data will be preserved."
     @State private var running = false
     @State private var connectionGuide: String? = nil
+    @State private var desktopReport: DesktopSelfTestReport?
+    @State private var desktopChecking = false
+    @State private var desktopTestError: String?
+
+    private let managedNotice = """
+    Privacy & Responsibility
+
+    HomeMCP Managed is an experimental tunnel service offered for testing. We recommend using your own tunnel (Bring Your Own Tunnel) whenever possible. Your HomeMCP Host runs on your own computer. The cloud relay forwards encrypted HTTPS traffic without decrypting your MCP requests, responses, or credentials, and it does not store that traffic. Subscription details such as your account identifier, assigned domain, plan and payment status may be stored to operate the service.
+
+    HomeMCP software, the managed tunnel, and third-party integrations are provided as-is, without promises of uninterrupted availability or error-free operation. You use them at your own risk; the provider does not accept responsibility for problems, losses, or damages arising from their use.
+    """
 
     private var appRoot: String {
         ProcessInfo.processInfo.environment["HOMEMCP_APP_ROOT"] ??
@@ -58,8 +115,12 @@ struct SetupView: View {
                     Text("HomeMCP Managed · subscription").tag("managed")
                 }.pickerStyle(.radioGroup)
                 if mode == "managed" {
-                    Text("Managed allocates a HomeMCP subdomain and uses the existing Oracle FRP service. Creating a new enrollment may require a paid subscription. You must explicitly approve it.")
+                    Text("HomeMCP Managed is an experimental testing service, not a production-grade service. We recommend Bring Your Own Tunnel whenever possible. Managed allocates a HomeMCP subdomain and may require a paid subscription; enrollment requires your confirmation.")
                         .foregroundStyle(.secondary)
+                    Text(managedNotice)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 } else {
                     Text("Use an HTTPS domain and a tunnel you control. Nothing is registered with the HomeMCP cloud.")
                         .foregroundStyle(.secondary)
@@ -80,7 +141,7 @@ struct SetupView: View {
                         Button("Request Enrollment…") {
                             let alert = NSAlert()
                             alert.messageText = "Request Managed enrollment?"
-                            alert.informativeText = "This contacts the HomeMCP subscription service. The selected plan may require payment. No enrollment will be submitted unless you explicitly approve."
+                            alert.informativeText = "This contacts the HomeMCP subscription service. The selected plan may require payment. No enrollment will be submitted unless you explicitly approve.\n\n"
                             alert.addButton(withTitle: "Submit enrollment")
                             alert.addButton(withTitle: "Cancel")
                             if alert.runModal() == .alertFirstButtonReturn {
@@ -138,6 +199,11 @@ struct SetupView: View {
         )) { selection in
             connectionGuideSheet(selection.id)
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if completed && !running && desktopReport != nil && desktopReport?.ready != true {
+                testDesktop()
+            }
+        }
         .onChange(of: step) { _, newStep in
             if newStep == 2 && !completed &&
                ProcessInfo.processInfo.environment["HOMEMCP_UI_SMOKE"] != "1" {
@@ -163,8 +229,9 @@ struct SetupView: View {
     }
 
     private var dashboard: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 14) {
-            Text("HomeMCP is ready").font(.title2).bold()
+            Text(desktopReport?.ready == true ? "HomeMCP is ready" : "Phone connected · verify desktop access").font(.title2).bold()
             Text("Next: connect an AI client to use this computer remotely.")
                 .foregroundStyle(.secondary)
             if let endpoint = mcpEndpoint {
@@ -194,11 +261,35 @@ struct SetupView: View {
                 Button("Manage devices") { openLocal("/passkeys") }
             }.disabled(running)
             Divider()
-            Text("Desktop control permissions").font(.headline)
-            Text("Accessibility and Screen Recording must be granted to the actual desktop automation helper, not just HomeMCP Manager. The helper is optional and is not yet configured on every Mac.")
+            Text("Desktop access test").font(.headline)
+            Text("Grant Access starts the macOS permission flow. Finish the system confirmations, then verify that screen capture and window reading actually work.")
                 .font(.footnote).foregroundStyle(.secondary)
+            if let report = desktopReport {
+                ForEach(report.checks, id: \.name) { check in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label((check.name == "screenshot" ? "Screenshot" : (check.name == "window" ? "Window reading" : "Manager")) + ": " + check.state.replacingOccurrences(of: "_", with: " "),
+                              systemImage: check.state == "passed" ? "checkmark.circle.fill" : "exclamationmark.circle")
+                        if let nextStep = check.nextStep { Text(nextStep).font(.footnote) }
+                    }
+                }
+            }
+            if let desktopTestError { Text(desktopTestError).font(.footnote).foregroundStyle(.red) }
             HStack {
+                if desktopReport?.checks.contains(where: { $0.state == "permission_required" }) == true {
+                    Button("Grant Missing Access") {
+                        if desktopReport?.checks.contains(where: { $0.name == "screenshot" && $0.state == "permission_required" }) == true {
+                            requestDesktopScreenRecording()
+                        } else { requestAccessibility() }
+                    }.disabled(desktopChecking || running)
+                }
+                Button(desktopChecking ? "Testing Desktop…" : "Test Desktop Again") { testDesktop() }
+                    .disabled(desktopChecking || running)
+            }
+            HStack {
+                Button("Request Accessibility") { requestAccessibility() }
                 Button("Accessibility Settings") { openPrivacySettings("Privacy_Accessibility") }
+                Button("Request Screen Recording") { requestDesktopScreenRecording() }
+                    .disabled(running)
                 Button("Screen Recording Settings") { openPrivacySettings("Privacy_ScreenCapture") }
             }
             Button("Restart local Host") { runScript("setup.mjs", ["restore"]) }
@@ -216,7 +307,21 @@ struct SetupView: View {
                     feedback = "Wizard restarted. Existing local data was not deleted."
                 }
             }
+        }.frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func requestDesktopScreenRecording() {
+        let granted = CGRequestScreenCaptureAccess()
+        feedback = granted ? "Screen Recording is enabled." : "Enable HomeMCP Manager in Screen Recording settings."
+        if !granted { openPrivacySettings("Privacy_ScreenCapture") }
+    }
+
+    private func requestAccessibility() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        let granted = AXIsProcessTrustedWithOptions(options)
+        feedback = granted ? "Accessibility is enabled." : "Enable HomeMCP Manager in Accessibility settings."
+        if !granted { openPrivacySettings("Privacy_Accessibility") }
     }
 
     private func openPrivacySettings(_ pane: String) {
@@ -319,6 +424,25 @@ struct SetupView: View {
         NSWorkspace.shared.open(url)
     }
 
+    private func testDesktop() {
+        guard !desktopChecking else { return }
+        desktopChecking = true
+        desktopTestError = nil
+        let executable = nodePath
+        let script = URL(fileURLWithPath: appRoot).appendingPathComponent("scripts/macos/desktop-self-test.mjs").path
+        Task {
+            let result = await Task.detached { ScriptRunner.execute(executable, [script]) }.value
+            desktopChecking = false
+            guard result.code == 0, let data = result.output.data(using: .utf8),
+                  let report = try? JSONDecoder().decode(DesktopSelfTestReport.self, from: data) else {
+                desktopReport = nil
+                desktopTestError = "Desktop test could not finish. Reopen Manager and test again."
+                return
+            }
+            desktopReport = report
+        }
+    }
+
     private func checkWizard(advance: Bool) {
         running = true
         let executable = nodePath
@@ -338,6 +462,7 @@ struct SetupView: View {
             if state.complete {
                 completed = true
                 feedback = "Connected: " + state.origin + " · Passkeys: \(state.passkeyCount)"
+                testDesktop()
             } else {
                 completed = false
                 if !state.origin.isEmpty {
@@ -410,3 +535,4 @@ private enum ScriptRunner {
         }
     }
 }
+

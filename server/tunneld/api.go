@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"regexp"
@@ -12,14 +13,17 @@ import (
 	"time"
 )
 
-// Public registration/account API. There are deliberately NO web pages:
-// registration lives inside the HomeMCP client; the only browser surface
-// is Stripe's hosted Checkout/Billing Portal. See docs/CLIENT_CONTRACT.md
-// for the wire contract this file implements.
+// Public registration/account API. Registration lives inside the
+// HomeMCP client; the browser surfaces are Stripe's hosted
+// Checkout/Billing Portal plus tunneld's one static checkout-return
+// page (handleCheckoutComplete), which only reports status and never
+// issues credentials. See docs/CLIENT_CONTRACT.md for the wire
+// contract this file implements.
 //
 // Error vocabulary (stable, machine-readable):
 //   bad_request, invalid_username, username_reserved, username_taken,
 //   invalid_plan, enrollment_not_found, credentials_not_ready,
+//   already_claimed, not_claimed, stale_claim,
 //   unauthorized, no_billing_account, stripe_not_configured,
 //   admin_disabled, user_not_found, invalid_event, not_mock_account,
 //   cert_dns_not_configured, subscription_inactive, invalid_txt_value,
@@ -231,21 +235,14 @@ type enrollmentView struct {
 	Subdomain         string           `json:"subdomain"`
 	SubStatus         string           `json:"sub_status,omitempty"`
 	CredentialsIssued bool             `json:"credentials_issued"`
+	ClaimAcked        bool             `json:"claim_acked"`
 	Credentials       *credentialsView `json:"credentials,omitempty"`
 }
 
-// handleGetEnrollment is GET /api/v1/enrollments/{id}. The enrollment ID
-// is the claim capability: after the webhook marks the enrollment ready,
-// the FIRST GET generates the per-user token, stores only its hash, and
-// returns the credentials exactly once. Later GETs report status without
-// the token (it is unrecoverable by design; see CLIENT_CONTRACT.md).
-func (s *Server) handleGetEnrollment(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	enr, ok := s.store.GetEnrollment(id)
-	if !ok {
-		writeAPIError(w, http.StatusNotFound, "enrollment_not_found", "no such enrollment")
-		return
-	}
+// enrollmentViewOf renders the read-only status view of an enrollment.
+// It NEVER carries credentials: issuance happens only in
+// handleClaimEnrollment.
+func (s *Server) enrollmentViewOf(enr Enrollment) enrollmentView {
 	view := enrollmentView{
 		EnrollmentID:      enr.ID,
 		Status:            enr.Status,
@@ -253,41 +250,46 @@ func (s *Server) handleGetEnrollment(w http.ResponseWriter, r *http.Request) {
 		Plan:              enr.Plan,
 		Subdomain:         s.cfg.SubdomainFor(enr.Username),
 		CredentialsIssued: enr.CredentialsIssued,
+		ClaimAcked:        enr.ClaimAcked,
 	}
 	if u, ok := s.store.GetUser(enr.Username); ok {
 		view.SubStatus = u.SubStatus
 	}
-	if enr.Status != EnrollmentReady {
-		// pending_payment, or already claimed. For real accounts a
-		// claimed enrollment never yields credentials again (recovery
-		// is the operator reset endpoint). Mock (test) accounts are
-		// the deliberate exception: they are reusable, so re-polling a
-		// claimed enrollment ROTATES the token and returns fresh
-		// credentials — client development can wipe local state and
-		// re-claim the same test username at will.
-		if enr.Status == EnrollmentClaimed {
-			if u, ok := s.store.GetUser(enr.Username); ok && u.Mock {
-				token, err := generateToken()
-				if err != nil {
-					writeAPIError(w, http.StatusInternalServerError, "internal", "could not generate credentials")
-					return
-				}
-				user, err := s.store.RotateUserToken(enr.Username, hashToken(token))
-				if err != nil {
-					writeAPIError(w, http.StatusInternalServerError, "internal", "could not re-issue credentials")
-					return
-				}
-				log.Printf("mock account %q: credentials re-issued via enrollment re-claim (token rotated)", user.Username)
-				view.SubStatus = user.SubStatus
-				view.Credentials = &credentialsView{
-					Username:   user.Username,
-					Token:      token,
-					Subdomain:  user.Subdomain,
-					FRPCConfig: s.renderFRPCConfig(user, token),
-				}
-			}
-		}
-		writeJSON(w, http.StatusOK, view)
+	return view
+}
+
+// handleGetEnrollment is GET /api/v1/enrollments/{id}: a pure status
+// read. It never generates, issues, rotates or otherwise consumes
+// credentials, so it is safe for anyone to poll or refresh any number
+// of times — the client polls it while waiting for the payment
+// webhook, and nothing a browser does can burn the one claim. (This
+// handler originally issued credentials on the first read; combined
+// with Stripe's success_url pointing at it, a browser return or
+// refresh could consume the claim before the client ever saved the
+// credentials. Issuance now lives behind POST .../claim only.)
+func (s *Server) handleGetEnrollment(w http.ResponseWriter, r *http.Request) {
+	enr, ok := s.store.GetEnrollment(r.PathValue("id"))
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "enrollment_not_found", "no such enrollment")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.enrollmentViewOf(enr))
+}
+
+// handleClaimEnrollment is POST /api/v1/enrollments/{id}/claim: the one
+// and only credential-issuance path. The enrollment ID is the claim
+// capability. The claim is RECOVERABLE until the client confirms it
+// persisted the credentials (POST .../claim/ack): claiming an
+// already-claimed-but-unacked enrollment rotates the token and returns
+// fresh credentials, so a client that crashed, lost the response, or
+// failed to save can simply claim again. Once acked, a real account's
+// claim is final (409 already_claimed; recovery is the operator reset
+// endpoint). Mock (test) accounts may re-claim even after the ack —
+// rotation again — so client development can restart at will.
+func (s *Server) handleClaimEnrollment(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.store.GetEnrollment(id); !ok {
+		writeAPIError(w, http.StatusNotFound, "enrollment_not_found", "no such enrollment")
 		return
 	}
 	token, err := generateToken()
@@ -295,22 +297,22 @@ func (s *Server) handleGetEnrollment(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "internal", "could not generate credentials")
 		return
 	}
-	_, user, err := s.store.ClaimAndIssue(enr.ID, hashToken(token))
+	enr, user, err := s.store.ClaimAndIssue(id, hashToken(token))
 	if err != nil {
-		if errors.Is(err, ErrAlreadyClaimed) {
-			// Lost a race with a concurrent claim: report claimed
-			// state without credentials.
-			view.Status = EnrollmentClaimed
-			view.CredentialsIssued = true
-			writeJSON(w, http.StatusOK, view)
-			return
+		switch {
+		case errors.Is(err, ErrNotReady):
+			writeAPIError(w, http.StatusConflict, "credentials_not_ready", "payment has not completed yet; poll the enrollment status and claim once it is ready")
+		case errors.Is(err, ErrAlreadyClaimed):
+			writeAPIError(w, http.StatusConflict, "already_claimed", "credentials were already claimed and confirmed; ask support to reset them if they are lost")
+		case errors.Is(err, ErrNotFound):
+			writeAPIError(w, http.StatusNotFound, "enrollment_not_found", "no such enrollment")
+		default:
+			writeAPIError(w, http.StatusInternalServerError, "internal", "could not issue credentials")
 		}
-		writeAPIError(w, http.StatusInternalServerError, "internal", "could not issue credentials")
 		return
 	}
-	view.Status = EnrollmentClaimed
-	view.CredentialsIssued = true
-	view.SubStatus = user.SubStatus
+	log.Printf("enrollment %s: credentials issued for %q (claim)", enr.ID, user.Username)
+	view := s.enrollmentViewOf(enr)
 	view.Credentials = &credentialsView{
 		Username:   user.Username,
 		Token:      token,
@@ -318,6 +320,81 @@ func (s *Server) handleGetEnrollment(w http.ResponseWriter, r *http.Request) {
 		FRPCConfig: s.renderFRPCConfig(user, token),
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+type claimAckRequest struct {
+	Token string `json:"token"`
+}
+
+// handleClaimAck is POST /api/v1/enrollments/{id}/claim/ack: the
+// client confirms it has PERSISTED the credentials from its claim by
+// presenting the token it saved. The ack lands only if that token is
+// still the current one — if a newer claim rotated it in the meantime
+// the ack fails with 409 stale_claim and the client must claim again
+// and ack the newest credentials. After a successful ack the claim is
+// final (see handleClaimEnrollment).
+func (s *Server) handleClaimAck(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req claimAckRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
+	if err := dec.Decode(&req); err != nil || strings.TrimSpace(req.Token) == "" {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "request body must be JSON {token} with the token from the claim response")
+		return
+	}
+	enr, err := s.store.AckClaim(id, hashToken(strings.TrimSpace(req.Token)))
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotFound):
+			writeAPIError(w, http.StatusNotFound, "enrollment_not_found", "no such enrollment")
+		case errors.Is(err, ErrNotClaimed):
+			writeAPIError(w, http.StatusConflict, "not_claimed", "no credentials have been claimed for this enrollment yet")
+		case errors.Is(err, ErrStaleClaim):
+			writeAPIError(w, http.StatusConflict, "stale_claim", "a newer claim superseded this token; claim again and confirm the newest credentials")
+		default:
+			writeAPIError(w, http.StatusInternalServerError, "internal", "could not confirm the claim")
+		}
+		return
+	}
+	log.Printf("enrollment %s: claim confirmed by client (credentials persisted)", enr.ID)
+	writeJSON(w, http.StatusOK, s.enrollmentViewOf(enr))
+}
+
+// handleCheckoutComplete is GET /checkout/complete: the static page
+// Stripe returns the browser to after hosted Checkout (success_url /
+// cancel_url). It ONLY reports where things stand and tells the user
+// to go back to the HomeMCP app — it never issues, rotates or consumes
+// credentials, so refreshing it (or a mail/link scanner prefetching
+// it) is harmless. The app itself learns the outcome by polling the
+// enrollment status and claiming over the API.
+func (s *Server) handleCheckoutComplete(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	heading := "Return to the HomeMCP app"
+	message := "You can close this tab and return to the HomeMCP app to check your signup status."
+	if q.Get("checkout") == "cancelled" {
+		heading = "Checkout cancelled"
+		message = "No charge was made. You can close this tab, return to the HomeMCP app, and try again whenever you're ready."
+	} else if enr, ok := s.store.GetEnrollment(q.Get("enrollment")); ok {
+		switch enr.Status {
+		case EnrollmentReady, EnrollmentClaimed:
+			heading = "Payment received"
+			message = "Your tunnel is ready. Close this tab and return to the HomeMCP app — it will finish setting up automatically."
+		case EnrollmentPendingPayment:
+			heading = "Payment is being confirmed"
+			message = "Stripe is still confirming your payment. Close this tab and return to the HomeMCP app — it will continue automatically once the confirmation lands."
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>HomeMCP Tunnel</title></head>
+<body style="font-family: system-ui, sans-serif; margin: 3em auto; max-width: 34em; padding: 0 1em; line-height: 1.5;">
+<h1>%s</h1>
+<p>%s</p>
+</body>
+</html>
+`, html.EscapeString(heading), html.EscapeString(message))
 }
 
 // renderFRPCConfig produces the ready-to-use frpc.toml a client receives

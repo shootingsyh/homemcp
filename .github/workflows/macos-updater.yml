@@ -1,0 +1,38 @@
+name: macOS updater build
+on:
+  pull_request:
+    paths:
+      - 'native/macos/**'
+      - 'scripts/macos/**'
+      - 'test/mac-update.test.mjs'
+      - '.github/workflows/macos-updater.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: node --test test/mac-update.test.mjs test/mac-permission-ui.test.mjs
+      - run: npm ci --ignore-scripts
+      - name: Build and verify signed package
+        run: |
+          sh scripts/macos/package.sh
+          codesign --verify --deep --strict 'build/macos-dist/payload/Applications/HomeMCP Manager.app'
+          cp build/macos-dist/HomeMCP-signed-app.pkg HomeMCP-${{ matrix.runner }}-0.1.33.pkg
+          shasum -a 256 HomeMCP-${{ matrix.runner }}-0.1.33.pkg > HomeMCP-${{ matrix.runner }}-0.1.33.pkg.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HomeMCP-${{ matrix.runner }}-0.1.33
+          path: |
+            HomeMCP-*.pkg
+            HomeMCP-*.pkg.sha256

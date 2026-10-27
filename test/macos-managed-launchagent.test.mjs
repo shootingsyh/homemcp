@@ -18,7 +18,7 @@ test('managed macOS launchd plists use local binaries and never embed tunnel sec
   assert.ok(!xml.includes('Bearer'));
   assert.ok(!xml.includes('HOMEMCP_FRP_TENANT'));
  }
- assert.match(managedPaths('/Users/demo').gateway,/LaunchAgents\/si.homemcp.gateway.plist$/);
+ assert.match(managedPaths('/Users/demo').gateway,/LaunchAgents[\\\/]si.homemcp.gateway.plist$/);
  assert.throws(()=>managedPlist({mode:'invalid'}),/unknown_managed_mode/);
 });
 test('plist escapes dynamic paths and labels',()=>{

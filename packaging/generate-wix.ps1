@@ -1,5 +1,7 @@
 param([Parameter(Mandatory)][string]$Payload,[Parameter(Mandatory)][string]$Output)
 $ErrorActionPreference='Stop'
+$version=(Get-Content (Join-Path $Payload 'package.json') -Raw|ConvertFrom-Json).version
+if($version -notmatch '^\d+\.\d+\.\d+$'){throw 'Payload requires a numeric MSI version'}
 Add-Type -AssemblyName System.Xml.Linq
 function X([string]$value){return [System.Security.SecurityElement]::Escape($value)}
 $files=Get-ChildItem $Payload -File -Recurse | Sort-Object FullName
@@ -38,7 +40,7 @@ foreach($f in $files){
 if(!$managerFileId){throw "Manager exe missing from MSI payload"}
 $xml=@"
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="HomeMCP" Manufacturer="HomeMCP" Version="0.1.27" UpgradeCode="E9437E1E-90A8-4D3D-9870-6A591E159CE4" Scope="perUser">
+  <Package Name="HomeMCP" Manufacturer="HomeMCP" Version="$version" UpgradeCode="E9437E1E-90A8-4D3D-9870-6A591E159CE4" Scope="perUser">
     <MajorUpgrade DowngradeErrorMessage="A newer HomeMCP is already installed." />
     <MediaTemplate EmbedCab="yes" />
     <CustomAction Id="LaunchHomeMCP" FileRef="$managerFileId" ExeCommand="" Execute="immediate" Impersonate="yes" Return="asyncNoWait" />
@@ -57,3 +59,4 @@ $xml=@"
 [System.IO.File]::WriteAllText($Output,$xml,[System.Text.UTF8Encoding]::new($false))
 [xml]$validated=$xml
 Write-Host "WiX manifest generated for $($files.Count) packaged files."
+

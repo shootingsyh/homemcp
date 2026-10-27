@@ -56,15 +56,8 @@ func mockEnrollAndPay(t *testing.T, ts *httptest.Server, username, plan string) 
 	if code, _ := doRaw(t, "POST", ts.URL+"/mock-pay/"+enrollmentID, nil); code != 200 {
 		t.Fatalf("mock pay POST: HTTP %d", code)
 	}
-	status, resp = doJSON(t, "GET", ts.URL+"/api/v1/enrollments/"+enrollmentID, nil, nil)
-	if status != 200 || resp["status"] != EnrollmentClaimed {
-		t.Fatalf("claim after mock pay: %d %v", status, resp)
-	}
-	creds, _ := resp["credentials"].(map[string]any)
-	token, _ := creds["token"].(string)
-	if token == "" {
-		t.Fatalf("claim issued no token: %v", resp)
-	}
+	token := claimViaAPI(t, ts, enrollmentID)
+	ackViaAPI(t, ts, enrollmentID, token)
 	return enrollmentID, token
 }
 
@@ -152,23 +145,13 @@ func TestMockPayFlowAnnualTrial(t *testing.T) {
 	}
 
 	// Claim issues the token. Mock accounts are reusable test
-	// accounts: a second poll ROTATES the token and returns fresh
-	// credentials (real accounts stay claim-exactly-once — see
+	// accounts: claiming again ROTATES the token and returns fresh
+	// credentials (real accounts are claim-once after the ack — see
 	// reclaim_test.go). The first token dies at rotation.
-	status, resp = doJSON(t, "GET", ts.URL+"/api/v1/enrollments/"+enrollmentID, nil, nil)
-	if status != 200 || resp["status"] != EnrollmentClaimed {
-		t.Fatalf("claim: %d %v", status, resp)
-	}
-	creds, _ := resp["credentials"].(map[string]any)
-	firstToken, _ := creds["token"].(string)
-	if firstToken == "" {
-		t.Fatalf("claim issued no credentials: %v", resp)
-	}
-	status, resp = doJSON(t, "GET", ts.URL+"/api/v1/enrollments/"+enrollmentID, nil, nil)
-	creds, _ = resp["credentials"].(map[string]any)
-	token, _ := creds["token"].(string)
-	if status != 200 || token == "" || token == firstToken {
-		t.Fatalf("mock re-claim should return a fresh rotated token: %d %v", status, resp)
+	firstToken := claimViaAPI(t, ts, enrollmentID)
+	token := claimViaAPI(t, ts, enrollmentID)
+	if token == firstToken {
+		t.Fatal("mock re-claim should return a fresh rotated token")
 	}
 	if loginResp := s.pluginLogin(loginContentJSON("alice", firstToken)); !loginResp.Reject {
 		t.Fatal("pre-rotation token still accepted after mock re-claim")
@@ -240,18 +223,11 @@ func TestMockPayMonthlyActiveNoTrial(t *testing.T) {
 	}
 }
 
-// mockClaimOnly performs just the claim GET and returns the token.
+// mockClaimOnly performs just the claim POST and returns the token.
 func mockClaimOnly(t *testing.T, ts *httptest.Server, enrollmentID string) (string, string) {
 	t.Helper()
-	status, resp := doJSON(t, "GET", ts.URL+"/api/v1/enrollments/"+enrollmentID, nil, nil)
-	if status != 200 || resp["status"] != EnrollmentClaimed {
-		t.Fatalf("claim: %d %v", status, resp)
-	}
-	creds, _ := resp["credentials"].(map[string]any)
-	token, _ := creds["token"].(string)
-	if token == "" {
-		t.Fatalf("claim issued no token: %v", resp)
-	}
+	token := claimViaAPI(t, ts, enrollmentID)
+	ackViaAPI(t, ts, enrollmentID, token)
 	return enrollmentID, token
 }
 

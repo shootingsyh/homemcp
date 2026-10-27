@@ -72,14 +72,23 @@ type MockUserEntry struct {
 // the claim capability: whoever presents it after payment receives the
 // credentials. Treat it like a secret link (see CLIENT_CONTRACT.md).
 type Enrollment struct {
-	ID                      string    `json:"id"`
-	Username                string    `json:"username"`
-	Plan                    string    `json:"plan"`
-	Status                  string    `json:"status"`
-	StripeCheckoutSessionID string    `json:"stripe_checkout_session_id,omitempty"`
-	CredentialsIssued       bool      `json:"credentials_issued"`
-	CreatedAt               time.Time `json:"created_at"`
-	UpdatedAt               time.Time `json:"updated_at"`
+	ID                      string `json:"id"`
+	Username                string `json:"username"`
+	Plan                    string `json:"plan"`
+	Status                  string `json:"status"`
+	StripeCheckoutSessionID string `json:"stripe_checkout_session_id,omitempty"`
+	CredentialsIssued       bool   `json:"credentials_issued"`
+	// ClaimAcked is set when the client confirms (POST claim/ack,
+	// presenting the token) that it has PERSISTED the credentials.
+	// Until then the claim is recoverable: a repeated claim ROTATES
+	// the token and re-issues, so a client that crashed or failed to
+	// save can simply claim again. After the ack, a real account's
+	// claim is final (recovery = operator reset); mock accounts may
+	// still re-claim (rotation) for client development.
+	ClaimAcked bool      `json:"claim_acked,omitempty"`
+	ClaimedAt  time.Time `json:"claimed_at,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // DNSChallenge is one ACME DNS-01 challenge tunneld is maintaining
@@ -405,6 +414,9 @@ var (
 	ErrUsernameTaken    = errors.New("username taken")
 	ErrNotFound         = errors.New("not found")
 	ErrAlreadyClaimed   = errors.New("credentials already issued")
+	ErrNotReady         = errors.New("enrollment not ready")
+	ErrNotClaimed       = errors.New("credentials not claimed")
+	ErrStaleClaim       = errors.New("claim superseded by a newer claim")
 	ErrChallengeLimit   = errors.New("too many active challenges")
 	ErrChallengeRateCap = errors.New("challenge creation rate exceeded")
 )
@@ -486,10 +498,24 @@ func newChallengeID() (string, error) {
 	return "dns_" + hex.EncodeToString(b), nil
 }
 
-// ClaimAndIssue atomically marks a ready enrollment claimed and installs
-// the hash of the freshly generated token on the user. It is the only
-// place a token hash is written, which guarantees issue-exactly-once even
-// under concurrent claim requests.
+// ClaimAndIssue installs the hash of a freshly generated token on the
+// user of a ready enrollment and marks the enrollment claimed. It backs
+// POST /api/v1/enrollments/{id}/claim — the ONLY issuance path (reads
+// never issue; see api.go).
+//
+// Claim states and retries (the recoverable-claim protocol):
+//   - ready: first issuance.
+//   - claimed, not yet acked: the client never confirmed it persisted
+//     the credentials (crash, network loss, save failure), so a repeat
+//     claim ROTATES — the new hash replaces the old, the un-persisted
+//     token dies, and the client saves the fresh credentials instead.
+//     Concurrent claims are safe for the same reason: every claim
+//     returns a then-current token, exactly one token is ever live,
+//     and the client converges by acking the newest one it saved.
+//   - claimed and acked: final for real accounts (ErrAlreadyClaimed;
+//     recovery is the operator reset endpoint). Mock (test) accounts
+//     deliberately stay re-claimable — rotation again — so client
+//     development can wipe local state and start over at will.
 func (s *Store) ClaimAndIssue(enrollmentID, tokenHash string) (Enrollment, User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -497,24 +523,64 @@ func (s *Store) ClaimAndIssue(enrollmentID, tokenHash string) (Enrollment, User,
 	if !ok {
 		return Enrollment{}, User{}, ErrNotFound
 	}
-	if e.Status == EnrollmentClaimed || e.CredentialsIssued {
-		return Enrollment{}, User{}, ErrAlreadyClaimed
+	// Status gate first: a pending enrollment has no user yet (the
+	// user is created by the payment funnel), so the readiness check
+	// must not depend on the user lookup.
+	if e.Status == EnrollmentPendingPayment {
+		return Enrollment{}, User{}, ErrNotReady
 	}
-	if e.Status != EnrollmentReady {
+	if e.Status != EnrollmentReady && e.Status != EnrollmentClaimed {
 		return Enrollment{}, User{}, ErrNotFound
 	}
 	u, ok := s.data.Users[e.Username]
 	if !ok {
 		return Enrollment{}, User{}, ErrNotFound
 	}
+	if e.Status == EnrollmentClaimed && e.ClaimAcked && !u.Mock {
+		return Enrollment{}, User{}, ErrAlreadyClaimed
+	}
 	u.TokenHash = tokenHash
 	e.Status = EnrollmentClaimed
 	e.CredentialsIssued = true
+	e.ClaimAcked = false
+	e.ClaimedAt = time.Now().UTC()
 	e.UpdatedAt = time.Now().UTC()
 	if err := s.saveLocked(); err != nil {
 		return Enrollment{}, User{}, err
 	}
 	return *e, *u, nil
+}
+
+// AckClaim confirms that the client persisted the credentials issued
+// for an enrollment: the caller presents the token it saved, and the
+// ack lands only if that token is still the current one (its hash
+// matches the user's). A mismatch means a newer claim rotated the
+// token after the caller saved — the caller must claim again and ack
+// the newest credentials instead (ErrStaleClaim). Acking is idempotent:
+// repeating an ack with the current token succeeds.
+func (s *Store) AckClaim(enrollmentID, tokenHash string) (Enrollment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.data.Enrollments[enrollmentID]
+	if !ok {
+		return Enrollment{}, ErrNotFound
+	}
+	if e.Status != EnrollmentClaimed || !e.CredentialsIssued {
+		return Enrollment{}, ErrNotClaimed
+	}
+	u, ok := s.data.Users[e.Username]
+	if !ok {
+		return Enrollment{}, ErrNotFound
+	}
+	if u.TokenHash != tokenHash {
+		return Enrollment{}, ErrStaleClaim
+	}
+	e.ClaimAcked = true
+	e.UpdatedAt = time.Now().UTC()
+	if err := s.saveLocked(); err != nil {
+		return Enrollment{}, err
+	}
+	return *e, nil
 }
 
 // RotateUserToken replaces a user's token hash with a fresh one

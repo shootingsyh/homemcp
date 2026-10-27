@@ -18,6 +18,8 @@ mkdir -p "$RESOURCES"
 cp -R "$ROOT/src" "$ROOT/scripts" "$ROOT/web" "$RESOURCES/"
 mkdir -p "$RESOURCES/native"
 cp -R "$ROOT/native/macos" "$RESOURCES/native/"
+cp "$ROOT/build/macos-keychain/home-mcp-keychain" "$RESOURCES/native/macos/home-mcp-keychain"
+chmod 755 "$RESOURCES/native/macos/home-mcp-keychain"
 cp "$ROOT/package.json" "$ROOT/package-lock.json" "$RESOURCES/"
 # Pin the runtime used by CI so the GUI cannot select an obsolete system Node.
 NODE_BIN=$(command -v node)
@@ -59,8 +61,17 @@ if [ -d "$ROOT/build/macos-worker" ]; then
   mkdir -p "$RESOURCES/build"
   cp -R "$ROOT/build/macos-worker" "$RESOURCES/build/"
 fi
+# Ad-hoc signing by default for developer builds. Set HOMEMCP_CODESIGN_IDENTITY
+# to an Apple Development / Developer ID Application certificate for a stable identity.
+# Set HOMEMCP_SKIP_CODESIGN=1 only when debugging code signing itself.
+if [ "${HOMEMCP_SKIP_CODESIGN:-0}" = "1" ]; then
+  PKG_NAME="HomeMCP-unsigned.pkg"
+else
+  HOMEMCP_CODESIGN_IDENTITY="${HOMEMCP_CODESIGN_IDENTITY:--}" sh "$ROOT/scripts/macos/sign-app.sh" "$MANAGER"
+  PKG_NAME="HomeMCP-signed-app.pkg"
+fi
 mkdir -p "$DEST/pkg-scripts"
 cp "$ROOT/scripts/macos/postinstall.sh" "$DEST/pkg-scripts/postinstall"
 chmod 755 "$DEST/pkg-scripts/postinstall"
-pkgbuild --scripts "$DEST/pkg-scripts" --root "$PAYLOAD" --identifier "si.homemcp.client" --version "$VERSION" "$DEST/HomeMCP-unsigned.pkg"
-echo "Unsigned development package: $DEST/HomeMCP-unsigned.pkg (NOT release ready)"
+pkgbuild --scripts "$DEST/pkg-scripts" --root "$PAYLOAD" --identifier "si.homemcp.client" --version "$VERSION" "$DEST/$PKG_NAME"
+echo "Package: $DEST/$PKG_NAME (developer build; package not notarized)"

@@ -19,4 +19,8 @@ chmod 600 "$PLIST"
 /bin/launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
 /bin/launchctl bootstrap "gui/$(id -u)" "$PLIST"
 /bin/launchctl kickstart -k "gui/$(id -u)/$LABEL"
-echo "HomeMCP Host LaunchAgent activated; opening Manager."
+# Desktop is now managed as an independent SMAppService login item.
+# Never recreate the legacy launch agent (it conflicts with the login item label).
+# The dedicated login item is registered by Manager after installation.
+# Preserve the existing desktop agent until explicit migration completes.
+echo "HomeMCP Host LaunchAgent activated; Desktop login item registration is separate."
