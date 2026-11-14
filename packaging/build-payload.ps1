@@ -70,6 +70,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP background command capture patch f
 & (Join-Path $worker 'python.exe') (Join-Path $root 'test\test_windows_powershell_capture.py')
 if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP background command regression failed' }
 
+& (Join-Path $worker 'python.exe') (Join-Path $root 'scripts\patch-windows-control-gate.py') (Join-Path $worker 'site-packages')
+if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP control gate patch failed' }
+& (Join-Path $worker 'python.exe') (Join-Path $root 'test\test_windows_control_gate.py')
+if ($LASTEXITCODE -ne 0) { throw 'Windows-MCP control gate regression failed' }
+
 & (Join-Path $worker 'python.exe') -c "import windows_mcp; print('BUNDLED_WINDOWS_MCP_OK')"
 if ($LASTEXITCODE -ne 0) { throw 'Embedded Python smoke test failed' }
 dotnet publish "$root\native\Manager\Manager.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$root\build\manager"
