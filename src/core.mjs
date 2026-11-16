@@ -17,7 +17,7 @@ export class Log {
  write(level,event,details={}){const line=JSON.stringify({ts:new Date().toISOString(),level,event,...details})+'\n';try{if(fs.existsSync(this.file)&&fs.statSync(this.file).size+Buffer.byteLength(line)>this.maxBytes){for(let n=this.maxFiles-1;n>=1;n--){const from=`${this.file}.${n}`,to=`${this.file}.${n+1}`;if(fs.existsSync(from)){if(n===this.maxFiles-1)fs.unlinkSync(from);else fs.renameSync(from,to);}}fs.renameSync(this.file,`${this.file}.1`);this.clean();}fs.appendFileSync(this.file,line);}catch(e){console.error('log failure',e.message)}}
 }
 export class McpClient {
- constructor(url,logger,timeoutMs=15000){this.url=url;this.log=logger;this.timeoutMs=timeoutMs;this.session=null;this.id=1;}
+ constructor(url,logger,timeoutMs=120000){this.url=url;this.log=logger;this.timeoutMs=timeoutMs;this.session=null;this.id=1;}
  async request(method,params,notification=false){
  const id=notification?undefined:++this.id;const body={jsonrpc:'2.0',method,...(id===undefined?{}:{id}),...(params===undefined?{}:{params})};const headers={'Content-Type':'application/json','Accept':'application/json, text/event-stream'};if(this.session)headers['Mcp-Session-Id']=this.session;
  const res=await fetch(this.url,{method:'POST',headers,body:JSON.stringify(body),signal:AbortSignal.timeout(this.timeoutMs)});
@@ -89,7 +89,7 @@ export class Worker {
   this.pending=(async()=>{
    this.status='starting';
    try{
-    const client=new StdioMcpClient(this.spec,{maxLineBytes:this.spec.maxLineBytes||4*1024*1024});
+    const client=new StdioMcpClient(this.spec,{timeoutMs:this.spec.timeoutMs||120000,maxLineBytes:this.spec.maxLineBytes||4*1024*1024});
     await client.connect();this.client=client;this.child=client.child;this.owned=true;
     const tools=await client.list();this.tools=tools;this.status='ready';this.failures=0;
     client.on('unavailable',()=>{this.status='stopped';this.owned=false;this.client=null;this.child=null});
@@ -118,7 +118,7 @@ export class Worker {
  while(Date.now()<deadline){if(!this.child)throw new Error('worker_exited_during_startup');try{
  if(!await isPortOpen(this.spec.url,250)){await sleep(400);continue}
  if(!await ownsListener(Number(new URL(this.spec.url).port),this.child.pid))throw new Error('listener_not_owned_by_worker');
- const client=new McpClient(this.spec.url,this.log);await client.connect();const result=await client.request('tools/list',{});this.client=client;this.tools=result.tools||[];this.owned=true;this.status='ready';this.failures=0;this.log.write('info','worker_ready',{worker:this.spec.name,count:this.tools.length});return client;
+ const client=new McpClient(this.spec.url,this.log,this.spec.timeoutMs||120000);await client.connect();const result=await client.request('tools/list',{});this.client=client;this.tools=result.tools||[];this.owned=true;this.status='ready';this.failures=0;this.log.write('info','worker_ready',{worker:this.spec.name,count:this.tools.length});return client;
  }catch(e){lastError=e;await sleep(500)}}
  throw new Error(`mcp_not_ready: ${lastError?.message||'timeout'}`);
  }catch(e){this.status='failed';this.client=null;this.owned=false;this.failures++;this.retryAfter=Date.now()+Math.min(60000,1000*2**Math.min(this.failures,6));this.log.write('error','worker_start_failed',{worker:this.spec.name,message:e.message,backoffMs:this.retryAfter-Date.now()});await this.stop();throw e}}

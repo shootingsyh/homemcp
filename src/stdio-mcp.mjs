@@ -3,7 +3,7 @@ import {EventEmitter} from 'node:events';
 
 /** Direct stdio MCP client. Stdout is protocol-only; stderr is never exposed as a result. */
 export class StdioMcpClient extends EventEmitter {
- constructor(spec,{timeoutMs=15000,maxLineBytes=4*1024*1024}={}){
+ constructor(spec,{timeoutMs=120000,maxLineBytes=4*1024*1024}={}){
   super();this.spec=spec;this.timeoutMs=timeoutMs;this.maxLineBytes=maxLineBytes;this.id=0;this.pending=new Map();this.buffer='';this.child=null;
  }
  async connect(){

@@ -52,10 +52,10 @@ const config={
   policy:{browser_navigate:'allow',browser_snapshot:'allow',browser_tabs:'allow',system_usage:'allow',system_processes:'allow',shell_execute:'allow'}
  },
  egress:{enabled:false,mode:'disabled'},
- workers:[{name:'mac-system',transport:'stdio',command:node,args:[path.join(project,'scripts','macos','diagnostics-worker.mjs')]},{
+ workers:[{name:'mac-system',transport:'stdio',command:node,args:[path.join(project,'scripts','macos','diagnostics-worker.mjs')],timeoutMs:120000},{
   name:'browser',command:node,
   args:[browserCli,'--browser','chrome','--user-data-dir',browserRoot,'--shared-browser-context','--host','127.0.0.1','--port',String(browserPort)],
-  url:'http://127.0.0.1:'+browserPort+'/mcp',startupMs:35000
+  url:'http://127.0.0.1:'+browserPort+'/mcp',startupMs:35000,timeoutMs:120000
  }],
  tools:{
   browser_navigate:{worker:'browser',upstream:'browser_navigate',description:'Navigate browser',inputSchema:{type:'object',properties:{url:{type:'string'}},required:['url']}},
@@ -63,11 +63,11 @@ const config={
   browser_tabs:{worker:'browser',upstream:'browser_tabs',description:'List and select HomeMCP managed Chrome tabs',inputSchema:{type:'object',properties:{action:{type:'string'},index:{type:'integer'}}}},
   system_usage:{worker:'mac-system',upstream:'system_usage',description:'Read Mac CPU load and memory',inputSchema:{type:'object',properties:{}}},
   system_processes:{worker:'mac-system',upstream:'system_processes',description:'List Mac processes',inputSchema:{type:'object',properties:{sort:{type:'string'},limit:{type:'integer'}}}},
-  shell_execute:{worker:'mac-system',upstream:'shell_execute',description:'Execute macOS shell command under the same HomeMCP tool permission policy as Windows PowerShell',inputSchema:{type:'object',properties:{command:{type:'string'},cwd:{type:'string'},timeout_ms:{type:'integer'}},required:['command']}}
+  shell_execute:{worker:'mac-system',upstream:'shell_execute',description:'Execute macOS shell command under the same HomeMCP tool permission policy as Windows PowerShell. Long-running work: start it detached (nohup/setsid or launchctl) with output to a log file, return immediately, then poll the log with short calls. Synchronous execution is aborted after about 120 seconds, and a timeout does not mean the command did not run.',inputSchema:{type:'object',properties:{command:{type:'string'},cwd:{type:'string'},timeout_ms:{type:'integer'}},required:['command']}}
  }
 };
 if(desktopBinary){
- config.workers.push({name:'desktop',transport:'stdio',command:desktopBinary,args:['serve']});
+ config.workers.push({name:'desktop',transport:'stdio',command:desktopBinary,args:['serve'],timeoutMs:120000});
  const readonly={
   desktop_list_apps:{upstream:'list_apps',description:'List running macOS applications',
    inputSchema:{type:'object',properties:{},additionalProperties:false}},

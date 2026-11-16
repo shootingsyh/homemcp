@@ -24,8 +24,8 @@ $config=@{
  security=@{adminToken=(New-Token);approvalTimeoutMs=600000;policy=@{browser_navigate='allow';browser_snapshot='allow';desktop_Snapshot='allow';desktop_Screenshot='allow';desktop_Click='allow';desktop_Type='allow';desktop_Scroll='allow';desktop_Move='allow';desktop_Shortcut='allow';desktop_Wait='allow';desktop_WaitFor='allow';desktop_App='allow';desktop_PowerShell='allow'}}
  egress=@{enabled=$false;mode='disabled'}
  workers=@(
-  @{name='browser';command=(Join-Path $AppDir 'runtime\node.exe');args=@((Join-Path $AppDir 'workers\playwright\cli.mjs'),'--browser','msedge','--user-data-dir',(Join-Path $dataDir 'EdgeProfile'),'--shared-browser-context','--host','127.0.0.1','--port',([string]$browserPort));url="http://127.0.0.1:$browserPort/mcp";startupMs=35000},
-  @{name='desktop';command=(Join-Path $AppDir 'workers\windows-mcp\python.exe');args=@('-m','windows_mcp','serve','--transport','streamable-http','--host','127.0.0.1','--port',([string]$desktopPort),'--tools','Screenshot,Snapshot,Click,Type,Scroll,Move,Shortcut,Wait,WaitFor,App,PowerShell');url="http://127.0.0.1:$desktopPort/mcp";startupMs=35000}
+  @{name='browser';command=(Join-Path $AppDir 'runtime\node.exe');args=@((Join-Path $AppDir 'workers\playwright\cli.mjs'),'--browser','msedge','--user-data-dir',(Join-Path $dataDir 'EdgeProfile'),'--shared-browser-context','--host','127.0.0.1','--port',([string]$browserPort));url="http://127.0.0.1:$browserPort/mcp";startupMs=35000;timeoutMs=120000},
+  @{name='desktop';command=(Join-Path $AppDir 'workers\windows-mcp\python.exe');args=@('-m','windows_mcp','serve','--transport','streamable-http','--host','127.0.0.1','--port',([string]$desktopPort),'--tools','Screenshot,Snapshot,Click,Type,Scroll,Move,Shortcut,Wait,WaitFor,App,PowerShell');url="http://127.0.0.1:$desktopPort/mcp";startupMs=35000;timeoutMs=120000}
  )
  tools=@{
   browser_navigate=@{worker='browser';upstream='browser_navigate';description='Browser navigate';inputSchema=@{type='object';properties=@{url=@{type='string'}};required=@('url')}}
@@ -40,7 +40,7 @@ $config=@{
   desktop_Wait=@{worker='desktop';upstream='Wait';description='Windows desktop Wait';inputSchema=@{type='object';properties=@{duration=@{type='integer'}}}}
   desktop_WaitFor=@{worker='desktop';upstream='WaitFor';description='Windows desktop WaitFor';inputSchema=@{type='object';properties=@{condition=@{type='string'};text=@{type='string'};window_name=@{type='string'};timeout=@{type='integer'}}}}
   desktop_App=@{worker='desktop';upstream='App';description='Windows desktop App';inputSchema=@{type='object';properties=@{mode=@{type='string'};name=@{type='string'};executable=@{type='string'};args=@{type='array';items=@{type='string'}};cwd=@{type='string'};window_loc=@{type='array';items=@{type='integer'}};window_size=@{type='array';items=@{type='integer'}}}}}
-  desktop_PowerShell=@{worker='desktop';upstream='PowerShell';description='Windows desktop PowerShell';inputSchema=@{type='object';properties=@{command=@{type='string'};timeout=@{type='integer'}}}}
+  desktop_PowerShell=@{worker='desktop';upstream='PowerShell';description='Windows desktop PowerShell. Long-running work: start it detached (Start-Process, a scheduled task, or setsid/systemd-run inside WSL) with output to a log file, return immediately, then poll the log with short calls. Synchronous execution is aborted after about 120 seconds, and a timeout does not mean the command did not run.';inputSchema=@{type='object';properties=@{command=@{type='string'};timeout=@{type='integer'}}}}
  }
 }
 $tmp="$ConfigPath.tmp.$PID"
