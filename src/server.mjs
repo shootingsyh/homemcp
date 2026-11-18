@@ -136,7 +136,7 @@ const server=http.createServer(async(req,res)=>{
    try{
     if(operation==='token'){
      const result=oauth.exchange(form);
-     log.write('info','oauth_request',{operation,grant,clientTag,outcome:'accepted'});
+     log.write('info','oauth_request',{operation,grant,clientTag,outcome:'accepted',...(grant==='refresh_token'?{mode:oauth.lastRefreshOutcome,...(oauth.lastRefreshOutcome==='replayed'?{retryAgeMs:oauth.lastRetryAgeMs}:{})}:{})});
      return send(200,result);
     }
     oauth.revoke(form.get('token'),client);

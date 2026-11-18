@@ -5,7 +5,7 @@ import {HomeOAuth} from '../src/oauth.mjs';
 const fixture=()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'homemcp-oauth-'));const auth=new HomeOAuth(dir,'https://mcp.example.org');return {auth,close(){auth.close();fs.rmSync(dir,{recursive:true,force:true})}}};
 const form=x=>new URLSearchParams(x);
 test('authorization code exchanges with S256 and one-time use',()=>{const f=fixture();try{const {auth}=f,client=auth.register({redirect_uris:['https://chat.example/callback']}).client_id,verifier='q'.repeat(43),challenge=crypto.createHash('sha256').update(verifier).digest('base64url');const params=form({client_id:client,redirect_uri:'https://chat.example/callback',response_type:'code',code_challenge_method:'S256',code_challenge:challenge,resource:auth.resource,scope:'mcp offline_access'});const code=auth.issueCode(auth.validateAuth(params));const request={client_id:client,grant_type:'authorization_code',code,code_verifier:verifier,redirect_uri:'https://chat.example/callback',resource:auth.resource};const tokens=auth.exchange(form(request));assert.equal(auth.authorized(tokens.access_token),true);assert.equal(tokens.expires_in,3600);assert.ok(tokens.refresh_token);assert.throws(()=>auth.exchange(form(request)),/invalid_grant/);}finally{f.close()}});
-test('refresh rotates and duplicate attempts do not revoke successors',()=>{const f=fixture();try{const {auth}=f,client=auth.register({redirect_uris:['https://chat.example/callback']}).client_id;const first=auth.issueTokens(client,auth.resource,'mcp offline_access'),next=auth.exchange(form({grant_type:'refresh_token',client_id:client,refresh_token:first.refresh_token,resource:auth.resource}));assert.ok(next.refresh_token);assert.notEqual(first.refresh_token,next.refresh_token);assert.throws(()=>auth.exchange(form({grant_type:'refresh_token',client_id:client,refresh_token:first.refresh_token,resource:auth.resource})),/invalid_grant/);assert.equal(auth.authorized(next.access_token),true);const third=auth.exchange(form({grant_type:'refresh_token',client_id:client,refresh_token:next.refresh_token,resource:auth.resource}));assert.ok(third.refresh_token);assert.equal(auth.authorized(third.access_token),true)}finally{f.close()}});
+test('refresh rotates and duplicate attempts do not revoke successors',()=>{const f=fixture();try{const {auth}=f,client=auth.register({redirect_uris:['https://chat.example/callback']}).client_id;const first=auth.issueTokens(client,auth.resource,'mcp offline_access'),next=auth.exchange(form({grant_type:'refresh_token',client_id:client,refresh_token:first.refresh_token,resource:auth.resource}));assert.ok(next.refresh_token);assert.notEqual(first.refresh_token,next.refresh_token);assert.deepEqual(auth.exchange(form({grant_type:'refresh_token',client_id:client,refresh_token:first.refresh_token,resource:auth.resource})),next);assert.equal(auth.authorized(next.access_token),true);const third=auth.exchange(form({grant_type:'refresh_token',client_id:client,refresh_token:next.refresh_token,resource:auth.resource}));assert.ok(third.refresh_token);assert.equal(auth.authorized(third.access_token),true)}finally{f.close()}});
 test('client redirect validation and resource binding',()=>{const f=fixture();try{const {auth}=f;for(const uri of ['http://evil.example/','javascript:alert(1)','https://ok.example/#a'])assert.throws(()=>auth.register({redirect_uris:[uri]}));const client=auth.register({redirect_uris:['http://127.0.0.1:5678/callback']}).client_id;const p=form({client_id:client,redirect_uri:'http://127.0.0.1:5678/callback',response_type:'code',code_challenge_method:'S256',code_challenge:'a'.repeat(43),resource:'https://other.example/mcp'});assert.throws(()=>auth.validateAuth(p),/invalid_target/);assert.equal(auth.metadata().scopes_supported.includes('offline_access'),true)}finally{f.close()}});
 
 test('separate installation domains have separate OAuth issuer and resource',()=>{const d=fs.mkdtempSync(path.join(os.tmpdir(),'homemcp-oauth-domains-'));try{const a=new HomeOAuth(d,'https://alice.example.org'),b=new HomeOAuth(d,'https://bob.example.org');assert.equal(a.metadata().issuer,'https://alice.example.org');assert.equal(b.metadata().issuer,'https://bob.example.org');assert.notEqual(a.protectedMetadata().resource,b.protectedMetadata().resource);const access=a.issueTokens('a',a.resource,'mcp').access_token;assert.equal(a.authorized(access),true);assert.equal(b.authorized(access),false);a.close();b.close()}finally{fs.rmSync(d,{recursive:true,force:true})}});
@@ -55,7 +55,7 @@ test('duplicate and expired refresh requests preserve successor while explicit r
   const first=auth.issueTokens(client,auth.resource,'mcp offline_access');
   const request=(refresh_token)=>form({grant_type:'refresh_token',client_id:client,refresh_token,resource:auth.resource});
   const second=auth.exchange(request(first.refresh_token));
-  for(let i=0;i<3;i++)assert.throws(()=>auth.exchange(request(first.refresh_token)),/invalid_grant/);
+  for(let i=0;i<3;i++)assert.deepEqual(auth.exchange(request(first.refresh_token)),second);
   assert.equal(auth.authorized(second.access_token),true);
   const third=auth.exchange(request(second.refresh_token));
   assert.equal(auth.authorized(third.access_token),true);
@@ -75,6 +75,73 @@ test('failed issuance rolls back consumption of refresh and authorization code',
   assert.throws(()=>auth.exchange(request),/simulated_issuance_failure/);
   assert.equal(auth.diagnoseRefreshFailure(request),'other');
   auth._issueTokens=original;
+  const next=auth.exchange(request);
+  assert.equal(auth.authorized(next.access_token),true);
+ }finally{f.close()}
+});
+
+test('retry survives Host restart, and a newer rotation invalidates older cached responses',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'homemcp-oauth-restart-'));
+ try{
+  let auth=new HomeOAuth(dir,'https://mcp.example.org');
+  const client=auth.register({redirect_uris:['https://chat.example/callback']}).client_id;
+  const first=auth.issueTokens(client,auth.resource,'mcp offline_access');
+  const req=(rt)=>form({grant_type:'refresh_token',client_id:client,refresh_token:rt,resource:auth.resource});
+  const next=auth.exchange(req(first.refresh_token));auth.close();
+  auth=new HomeOAuth(dir,'https://mcp.example.org');
+  assert.deepEqual(auth.exchange(req(first.refresh_token)),next);
+  const third=auth.exchange(req(next.refresh_token));
+  assert.throws(()=>auth.exchange(req(first.refresh_token)),/invalid_grant/);
+  assert.deepEqual(auth.exchange(req(next.refresh_token)),third);
+  auth.close();
+ }finally{fs.rmSync(dir,{recursive:true,force:true})}
+});
+
+test('retry window expiration, cross-client attempt, and revocation are fail closed',()=>{
+ const f=fixture();try{
+  const {auth}=f,client=auth.register({redirect_uris:['https://chat.example/callback']}).client_id;
+  const other=auth.register({redirect_uris:['https://chat.example/callback']}).client_id;
+  const first=auth.issueTokens(client,auth.resource,'mcp offline_access');
+  const request=(rt,c=client)=>form({grant_type:'refresh_token',client_id:c,refresh_token:rt,resource:auth.resource});
+  const next=auth.exchange(request(first.refresh_token));
+  assert.throws(()=>auth.exchange(request(first.refresh_token,other)),/invalid_grant/);
+  assert.equal(auth.authorized(next.access_token),true);
+  auth.db.prepare('UPDATE refresh_retry SET retry_until=0').run();
+  assert.throws(()=>auth.exchange(request(first.refresh_token)),/invalid_grant/);
+  assert.equal(auth.authorized(next.access_token),true);
+  const third=auth.exchange(request(next.refresh_token));
+  assert.deepEqual(auth.exchange(request(next.refresh_token)),third);
+  auth.revoke(third.refresh_token,client);
+  assert.throws(()=>auth.exchange(request(next.refresh_token)),/invalid_grant/);
+  assert.equal(auth.authorized(third.access_token),false);
+ }finally{f.close()}
+});
+
+test('encrypted retry response never stores plaintext and corruption fails closed',()=>{
+ const f=fixture();try{
+  const {auth}=f,client=auth.register({redirect_uris:['https://chat.example/callback']}).client_id;
+  const first=auth.issueTokens(client,auth.resource,'mcp offline_access');
+  const request=form({grant_type:'refresh_token',client_id:client,refresh_token:first.refresh_token,resource:auth.resource});
+  const next=auth.exchange(request);
+  const row=auth.db.prepare('SELECT encrypted_response FROM refresh_retry').get();
+  assert.ok(row.encrypted_response instanceof Uint8Array);
+  assert.equal(row.encrypted_response.includes(Buffer.from(next.refresh_token)),false);
+  auth.db.prepare('UPDATE refresh_retry SET encrypted_response=?').run(Buffer.from('corrupted'));
+  assert.throws(()=>auth.exchange(request),/invalid_grant/);
+  assert.equal(auth.authorized(next.access_token),true);
+ }finally{f.close()}
+});
+
+test('failed encrypted cache insertion rolls back refresh consumption',()=>{
+ const f=fixture();try{
+  const {auth}=f,client=auth.register({redirect_uris:['https://chat.example/callback']}).client_id;
+  const first=auth.issueTokens(client,auth.resource,'mcp offline_access');
+  const request=form({grant_type:'refresh_token',client_id:client,refresh_token:first.refresh_token,resource:auth.resource});
+  const old=auth.sealRetryResponse;
+  auth.sealRetryResponse=()=>{throw Error('simulated_cache_failure')};
+  assert.throws(()=>auth.exchange(request),/simulated_cache_failure/);
+  assert.equal(auth.diagnoseRefreshFailure(request),'other');
+  auth.sealRetryResponse=old;
   const next=auth.exchange(request);
   assert.equal(auth.authorized(next.access_token),true);
  }finally{f.close()}
