@@ -126,8 +126,27 @@ const server=http.createServer(async(req,res)=>{
    try{const body=await readJSON(req);if(body.approve!==true||typeof body.request!=='string'||body.request.length>8192)throw Error('invalid_request');const auth=oauth.validateAuth(new URLSearchParams(body.request));const code=oauth.issueCode(auth);const redirect=new URL(auth.redirect);redirect.searchParams.set('code',code);if(auth.state)redirect.searchParams.set('state',auth.state);return send(200,{redirect:redirect.toString()})}catch(e){return send(400,{error:e.message})}
   }
   if(req.method==='POST'&&['/token','/revoke'].includes(pathname)){
-   let input='';for await(const chunk of req){input+=chunk;if(input.length>8192)return send(413,{error:'too_large'})}
-   try{const form=new URLSearchParams(input);if(pathname==='/token')return send(200,oauth.exchange(form));oauth.revoke(form.get('token'),form.get('client_id'));return send(200,{})}catch(e){return send(400,{error:e.message})}
+   let input='';for await(const chunk of req){input+=chunk;if(input.length>8192){log.write('warn','oauth_request',{operation:pathname==='/token'?'token':'revoke',outcome:'rejected',reason:'too_large'});return send(413,{error:'too_large'})}}
+   const form=new URLSearchParams(input);
+   // Correlate failures without recording secrets, authorization codes, token hashes, or raw client IDs.
+   const client=form.get('client_id')||'';
+   const clientTag=client?crypto.createHash('sha256').update(client).digest('hex').slice(0,12):null;
+   const operation=pathname==='/token'?'token':'revoke';
+   const grant=operation==='token'?(['authorization_code','refresh_token'].includes(form.get('grant_type'))?form.get('grant_type'):'other'):null;
+   try{
+    if(operation==='token'){
+     const result=oauth.exchange(form);
+     log.write('info','oauth_request',{operation,grant,clientTag,outcome:'accepted'});
+     return send(200,result);
+    }
+    oauth.revoke(form.get('token'),client);
+    log.write('info','oauth_request',{operation,clientTag,outcome:'accepted'});
+    return send(200,{});
+   }catch(e){
+    const reason=['invalid_grant','invalid_client','invalid_target','unsupported_grant_type'].includes(e.message)?e.message:'other_error';
+    log.write('warn','oauth_request',{operation,grant,clientTag,outcome:'rejected',reason});
+    return send(400,{error:e.message});
+   }
   }
  }
  if(req.method==='GET'&&pathname==='/setup'&&route.searchParams.has('enroll')){
@@ -221,7 +240,14 @@ const server=http.createServer(async(req,res)=>{
  }
  if(req.url!=='/mcp'||req.method!=='POST')return send(404,{error:'not_found'});
  const supplied=(req.headers.authorization||'').match(/^Bearer (.+)$/i)?.[1];
- if(!((config.token&&tokenEqual(supplied,config.token))||(oauth&&oauth.authorized(supplied)))){if(oauth)res.setHeader('WWW-Authenticate',`Bearer resource_metadata=\"${oauth.issuer}/.well-known/oauth-protected-resource\"`);return send(401,{error:'unauthorized'});}
+ const legacyAccepted=!!(config.token&&tokenEqual(supplied,config.token));
+ const oauthAccepted=!legacyAccepted&&!!(oauth&&oauth.authorized(supplied));
+ if(!legacyAccepted&&!oauthAccepted){
+  log.write('warn','mcp_auth',{outcome:'rejected',reason:supplied?'invalid_or_expired':'missing_bearer'});
+  if(oauth)res.setHeader('WWW-Authenticate',`Bearer resource_metadata=\"${oauth.issuer}/.well-known/oauth-protected-resource\"`);
+  return send(401,{error:'unauthorized'});
+ }
+ log.write('info','mcp_auth',{outcome:'accepted',credential:legacyAccepted?'legacy':'oauth'});
  let buffer='';for await(const chunk of req){buffer+=chunk;if(Buffer.byteLength(buffer)>maxBody)return send(413,{error:'too_large'});}
  let msg;try{msg=JSON.parse(buffer);}catch{return send(400,{error:'bad_json'});}
  if(!msg||Array.isArray(msg)||msg.jsonrpc!=='2.0'||typeof msg.method!=='string')return send(400,{error:'invalid_request'});
