@@ -17,8 +17,51 @@ export class HomeOAuth{
  register(data){if(data?.token_endpoint_auth_method&&!['none'].includes(data.token_endpoint_auth_method))throw Error('unsupported_client_auth');if(!Array.isArray(data?.redirect_uris)||data.redirect_uris.length<1||data.redirect_uris.length>8||!data.redirect_uris.every(x=>typeof x==='string'&&x.length<2048&&allowedRedirect(x)))throw Error('invalid_redirect_uris');const id=token();this.db.prepare('INSERT INTO clients VALUES(?,?,?)').run(id,JSON.stringify(data.redirect_uris),Date.now());return {client_id:id,client_id_issued_at:Math.floor(Date.now()/1000),redirect_uris:data.redirect_uris,token_endpoint_auth_method:'none',grant_types:['authorization_code','refresh_token'],response_types:['code']}}
  validateAuth(p){const client=this.db.prepare('SELECT * FROM clients WHERE id=?').get(p.get('client_id')||'');if(!client)throw Error('invalid_client');const redirect=p.get('redirect_uri');if(!JSON.parse(client.redirects).includes(redirect))throw Error('invalid_redirect_uri');if(p.get('response_type')!=='code'||p.get('code_challenge_method')!=='S256'||!(/^[A-Za-z0-9_-]{43,128}$/.test(p.get('code_challenge')||'')))throw Error('invalid_request');const resource=p.get('resource');if(resource!==null&&resource!==this.resource&&resource!==this.issuer)throw Error('invalid_target');const scope=p.get('scope')||'mcp';if(!scope.split(' ').every(s=>['mcp','offline_access'].includes(s))||!scope.split(' ').includes('mcp'))throw Error('invalid_scope');return {client:client.id,redirect,challenge:p.get('code_challenge'),state:p.get('state')||'',resource:this.resource,scope}}
  issueCode(auth){const code=token();this.db.prepare('INSERT INTO codes VALUES(?,?,?,?,?,?,?)').run(digest(code),auth.client,auth.redirect,auth.challenge,auth.resource,auth.scope,Date.now()+120000);return code}
- issueTokens(client,resource,scope,family=null){const a=token(),r=scope.includes('offline_access')?token():null,now=Date.now();const grantFamily=r?(family||token()):null;this.db.prepare('INSERT INTO access VALUES(?,?,?,?,?)').run(digest(a),client,resource,now+3600000,grantFamily);if(r)this.db.prepare('INSERT INTO refresh VALUES(?,?,?,?,?,0)').run(digest(r),client,resource,now+90*86400000,grantFamily);return {access_token:a,token_type:'Bearer',expires_in:3600,scope, ...(r?{refresh_token:r}:{})}}
- exchange(form){const client=form.get('client_id'),grant=form.get('grant_type'),resource=form.get('resource');if(resource!==null&&resource!==this.resource&&resource!==this.issuer)throw Error('invalid_target');if(grant==='authorization_code'){const code=form.get('code')||'',row=this.db.prepare('SELECT * FROM codes WHERE hash=?').get(digest(code));if(!row||row.expires<Date.now()||row.client!==client||row.resource!==this.resource||row.redirect!==form.get('redirect_uri'))throw Error('invalid_grant');this.db.prepare('DELETE FROM codes WHERE hash=?').run(digest(code));const verifier=form.get('code_verifier')||'';if(!/^[A-Za-z0-9_.~-]{43,128}$/.test(verifier)||!safeEqual(crypto.createHash('sha256').update(verifier).digest('base64url'),row.challenge))throw Error('invalid_grant');return this.issueTokens(client,row.resource,row.scope)}if(grant==='refresh_token'){const value=form.get('refresh_token')||'',hash=digest(value),row=this.db.prepare('SELECT * FROM refresh WHERE hash=?').get(hash);if(!row||row.client!==client||row.resource!==this.resource)throw Error('invalid_grant');if(row.used){this.revokeFamily(row.family);throw Error('invalid_grant')}if(row.expires<Date.now()){this.revokeFamily(row.family);throw Error('invalid_grant')}this.db.prepare('UPDATE refresh SET used=1 WHERE hash=? AND used=0').run(hash);return this.issueTokens(client,row.resource,'mcp offline_access',row.family)}throw Error('unsupported_grant_type')}
+ transaction(action){
+  this.db.exec('BEGIN IMMEDIATE');
+  try{const result=action();this.db.exec('COMMIT');return result}
+  catch(e){this.db.exec('ROLLBACK');throw e}
+ }
+ issueTokens(client,resource,scope,family=null){
+  return this.transaction(()=>this._issueTokens(client,resource,scope,family));
+ }
+ _issueTokens(client,resource,scope,family=null){
+  const a=token(),r=scope.split(' ').includes('offline_access')?token():null,now=Date.now();
+  const grantFamily=r?(family||token()):null;
+  this.db.prepare('INSERT INTO access VALUES(?,?,?,?,?)').run(digest(a),client,resource,now+3600000,grantFamily);
+  if(r)this.db.prepare('INSERT INTO refresh VALUES(?,?,?,?,?,0)').run(digest(r),client,resource,now+90*86400000,grantFamily);
+  return {access_token:a,token_type:'Bearer',expires_in:3600,scope,...(r?{refresh_token:r}:{})};
+ }
+ exchange(form){
+  const client=form.get('client_id'),grant=form.get('grant_type'),resource=form.get('resource');
+  if(resource!==null&&resource!==this.resource&&resource!==this.issuer)throw Error('invalid_target');
+  if(grant==='authorization_code'){
+   const code=form.get('code')||'',hash=digest(code);
+   const row=this.db.prepare('SELECT * FROM codes WHERE hash=?').get(hash);
+   if(!row||row.expires<Date.now()||row.client!==client||row.resource!==this.resource||row.redirect!==form.get('redirect_uri'))throw Error('invalid_grant');
+   const verifier=form.get('code_verifier')||'';
+   if(!/^[A-Za-z0-9_.~-]{43,128}$/.test(verifier)||!safeEqual(crypto.createHash('sha256').update(verifier).digest('base64url'),row.challenge))throw Error('invalid_grant');
+   return this.transaction(()=>{
+    const deleted=this.db.prepare('DELETE FROM codes WHERE hash=?').run(hash);
+    if(deleted.changes!==1)throw Error('invalid_grant');
+    return this._issueTokens(client,row.resource,row.scope);
+   });
+  }
+  if(grant==='refresh_token'){
+   const hash=digest(form.get('refresh_token')||'');
+   // Rejected duplicates and expired tokens must NEVER implicitly revoke a healthy
+   // successor. Replays can be caused by concurrent refresh or lost responses.
+   // A replay still fails; explicit /revoke remains the way to revoke a family.
+   return this.transaction(()=>{
+    const row=this.db.prepare('SELECT * FROM refresh WHERE hash=?').get(hash);
+    if(!row||row.client!==client||row.resource!==this.resource||row.used||row.expires<Date.now())throw Error('invalid_grant');
+    const updated=this.db.prepare('UPDATE refresh SET used=1 WHERE hash=? AND used=0').run(hash);
+    if(updated.changes!==1)throw Error('invalid_grant');
+    return this._issueTokens(client,row.resource,'mcp offline_access',row.family);
+   });
+  }
+  throw Error('unsupported_grant_type');
+ }
  diagnoseRefreshFailure(form){
   const value=form.get('refresh_token')||'';
   const client=form.get('client_id')||'';
@@ -33,7 +76,13 @@ export class HomeOAuth{
   if(row.expires<Date.now())return 'token_expired';
   return 'other';
  }
- revokeFamily(family){this.db.prepare('DELETE FROM refresh WHERE family=?').run(family);this.db.prepare('DELETE FROM access WHERE family=?').run(family)}
+ revokeFamily(family){
+  return this.transaction(()=>this._revokeFamily(family));
+ }
+ _revokeFamily(family){
+  this.db.prepare('DELETE FROM refresh WHERE family=?').run(family);
+  this.db.prepare('DELETE FROM access WHERE family=?').run(family);
+ }
  revoke(value,client){const hash=digest(value||'');const row=this.db.prepare('SELECT family FROM refresh WHERE hash=? AND client=?').get(hash,client);if(row){this.revokeFamily(row.family);return}this.db.prepare('DELETE FROM access WHERE hash=? AND client=?').run(hash,client)}
  authorized(value){if(typeof value!=='string'||value.length>256)return false;const row=this.db.prepare('SELECT expires,resource FROM access WHERE hash=?').get(digest(value));return !!row&&row.expires>Date.now()&&row.resource===this.resource}
  close(){this.db.close()}
