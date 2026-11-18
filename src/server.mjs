@@ -144,7 +144,8 @@ const server=http.createServer(async(req,res)=>{
     return send(200,{});
    }catch(e){
     const reason=['invalid_grant','invalid_client','invalid_target','unsupported_grant_type'].includes(e.message)?e.message:'other_error';
-    log.write('warn','oauth_request',{operation,grant,clientTag,outcome:'rejected',reason});
+    const detail=operation==='token'&&grant==='refresh_token'&&reason==='invalid_grant'?oauth.diagnoseRefreshFailure(form):undefined;
+    log.write('warn','oauth_request',{operation,grant,clientTag,outcome:'rejected',reason,...(detail?{detail}:{})});
     return send(400,{error:e.message});
    }
   }

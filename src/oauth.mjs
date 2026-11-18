@@ -19,6 +19,20 @@ export class HomeOAuth{
  issueCode(auth){const code=token();this.db.prepare('INSERT INTO codes VALUES(?,?,?,?,?,?,?)').run(digest(code),auth.client,auth.redirect,auth.challenge,auth.resource,auth.scope,Date.now()+120000);return code}
  issueTokens(client,resource,scope,family=null){const a=token(),r=scope.includes('offline_access')?token():null,now=Date.now();const grantFamily=r?(family||token()):null;this.db.prepare('INSERT INTO access VALUES(?,?,?,?,?)').run(digest(a),client,resource,now+3600000,grantFamily);if(r)this.db.prepare('INSERT INTO refresh VALUES(?,?,?,?,?,0)').run(digest(r),client,resource,now+90*86400000,grantFamily);return {access_token:a,token_type:'Bearer',expires_in:3600,scope, ...(r?{refresh_token:r}:{})}}
  exchange(form){const client=form.get('client_id'),grant=form.get('grant_type'),resource=form.get('resource');if(resource!==null&&resource!==this.resource&&resource!==this.issuer)throw Error('invalid_target');if(grant==='authorization_code'){const code=form.get('code')||'',row=this.db.prepare('SELECT * FROM codes WHERE hash=?').get(digest(code));if(!row||row.expires<Date.now()||row.client!==client||row.resource!==this.resource||row.redirect!==form.get('redirect_uri'))throw Error('invalid_grant');this.db.prepare('DELETE FROM codes WHERE hash=?').run(digest(code));const verifier=form.get('code_verifier')||'';if(!/^[A-Za-z0-9_.~-]{43,128}$/.test(verifier)||!safeEqual(crypto.createHash('sha256').update(verifier).digest('base64url'),row.challenge))throw Error('invalid_grant');return this.issueTokens(client,row.resource,row.scope)}if(grant==='refresh_token'){const value=form.get('refresh_token')||'',hash=digest(value),row=this.db.prepare('SELECT * FROM refresh WHERE hash=?').get(hash);if(!row||row.client!==client||row.resource!==this.resource)throw Error('invalid_grant');if(row.used){this.revokeFamily(row.family);throw Error('invalid_grant')}if(row.expires<Date.now()){this.revokeFamily(row.family);throw Error('invalid_grant')}this.db.prepare('UPDATE refresh SET used=1 WHERE hash=? AND used=0').run(hash);return this.issueTokens(client,row.resource,'mcp offline_access',row.family)}throw Error('unsupported_grant_type')}
+ diagnoseRefreshFailure(form){
+  const value=form.get('refresh_token')||'';
+  const client=form.get('client_id')||'';
+  const resource=form.get('resource');
+  if(resource!==null&&resource!==this.resource&&resource!==this.issuer)return 'invalid_target';
+  if(!value)return 'missing_refresh_token';
+  const row=this.db.prepare('SELECT client,resource,expires,used FROM refresh WHERE hash=?').get(digest(value));
+  if(!row)return 'token_unknown';
+  if(row.client!==client)return 'client_mismatch';
+  if(row.resource!==this.resource)return 'resource_mismatch';
+  if(row.used)return 'token_used';
+  if(row.expires<Date.now())return 'token_expired';
+  return 'other';
+ }
  revokeFamily(family){this.db.prepare('DELETE FROM refresh WHERE family=?').run(family);this.db.prepare('DELETE FROM access WHERE family=?').run(family)}
  revoke(value,client){const hash=digest(value||'');const row=this.db.prepare('SELECT family FROM refresh WHERE hash=? AND client=?').get(hash,client);if(row){this.revokeFamily(row.family);return}this.db.prepare('DELETE FROM access WHERE hash=? AND client=?').run(hash,client)}
  authorized(value){if(typeof value!=='string'||value.length>256)return false;const row=this.db.prepare('SELECT expires,resource FROM access WHERE hash=?').get(digest(value));return !!row&&row.expires>Date.now()&&row.resource===this.resource}

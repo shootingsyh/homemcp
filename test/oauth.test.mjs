@@ -31,3 +31,20 @@ test('token exchange normalizes missing and issuer resources for codes and refre
   }
  }finally{f.close()}
 });
+
+test('refresh diagnostic distinguishes unknown, wrong client and already used token without changing grants',()=>{
+ const f=fixture();
+ try {
+  const a=f.auth,client=a.register({redirect_uris:['https://chat.example/callback']}).client_id;
+  const other=a.register({redirect_uris:['https://chat.example/callback']}).client_id;
+  const first=a.issueTokens(client,a.resource,'mcp offline_access');
+  const form=(clientId,rt)=>new URLSearchParams({client_id:clientId,refresh_token:rt,grant_type:'refresh_token',resource:a.resource});
+  assert.equal(a.diagnoseRefreshFailure(form(other,first.refresh_token)),'client_mismatch');
+  assert.equal(a.diagnoseRefreshFailure(form(client,'not-real')),'token_unknown');
+  assert.equal(a.authorized(first.access_token),true);
+  const next=a.exchange(form(client,first.refresh_token));
+  assert.equal(a.diagnoseRefreshFailure(form(client,first.refresh_token)),'token_used');
+  assert.equal(a.diagnoseRefreshFailure(form(client,next.refresh_token)),'other');
+  assert.equal(a.authorized(next.access_token),true);
+ }finally{f.close()}
+});
